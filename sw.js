@@ -1,7 +1,7 @@
 // Service worker — makes the whole game usable offline after the first visit.
 // Bump CACHE on every release that changes any precached asset.
 
-const CACHE = "banker-cache-v1";
+const CACHE = "banker-cache-v2";
 
 const ASSETS = [
   "./",
@@ -40,17 +40,32 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Cache-first for the app shell, network fill-in for anything else.
+  // Network-first for navigation requests (HTML) to ensure users always see the latest version
+  if (request.mode === "navigate" || request.headers.get("accept")?.includes("text/html")) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Network-first with cache fallback for app shell assets so updates apply immediately
   event.respondWith(
-    caches.match(request, { ignoreSearch: true }).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
         if (response && response.ok && request.method === "GET") {
           const clone = response.clone();
           caches.open(CACHE).then((cache) => cache.put(request, clone));
         }
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(request, { ignoreSearch: true }))
   );
 });
