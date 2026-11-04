@@ -78,9 +78,6 @@
       <div class="header-pill round-pill" id="hdr-round-container">
         <span class="pill-label">Round</span>
         <strong id="hdr-round-no">0</strong>
-        <button id="btn-next-round" class="btn btn-emerald btn-xs" title="Advance round and pay salary to all players">
-          <span>+ Advance Round</span>
-        </button>
       </div>
     </div>
   </header>
@@ -222,6 +219,9 @@
             <span class="badge badge-info" id="active-players-badge">0 Active</span>
           </div>
           <div class="heading-actions">
+            <button id="btn-next-round" class="btn btn-emerald-ghost btn-sm" title="Advance round and pay salary to all players">
+              + Advance Round
+            </button>
             <button id="btn-patch-salary" class="btn btn-ghost btn-sm" title="Edit Round Salary">
               ⚙️ Salary: <span id="label-curr-salary">₹2,000</span>
             </button>
@@ -302,12 +302,19 @@
               </div>
 
               <!-- Amount Input and Shortcuts -->
-              <div class="amount-row">
+              <div class="amount-row compact-amount-row">
                 <div class="form-group amount-input-group">
                   <label for="transfer-amount">Amount (<span class="currency-sym">₹</span>)</label>
-                  <div class="input-with-sym">
-                    <span class="sym-prefix">₹</span>
-                    <input type="number" id="transfer-amount" class="form-input amount-input" placeholder="0" min="1" step="1" required />
+                  <div class="amount-with-note">
+                    <div class="input-with-sym">
+                      <span class="sym-prefix">₹</span>
+                      <input type="number" id="transfer-amount" class="form-input amount-input" placeholder="0" min="1" step="1" required />
+                    </div>
+                    <button type="button" id="btn-open-desc-modal" class="btn btn-secondary btn-note" title="Add / View memo description">
+                      <span>📝</span>
+                      <span class="note-label">Note</span>
+                      <span id="desc-dot" class="desc-dot" style="display: none;"></span>
+                    </button>
                   </div>
                 </div>
 
@@ -316,19 +323,14 @@
                   <button type="button" class="chip-btn" data-add="100">+100</button>
                   <button type="button" class="chip-btn" data-add="500">+500</button>
                   <button type="button" class="chip-btn" data-add="1000">+1k</button>
-                  <button type="button" class="chip-btn" data-add="2000" id="chip-salary">+2k (Salary)</button>
-                  <button type="button" class="chip-btn" data-add="5000">+5k</button>
                   <button type="button" class="chip-btn chip-clear" id="chip-clear">Clear</button>
                 </div>
               </div>
 
-              <!-- Optional Description & Submit -->
-              <div class="submit-row">
-                <div class="form-group desc-group">
-                  <input type="text" id="transfer-description" class="form-input desc-input" placeholder="Optional description / memo (auto-suggested)" />
-                </div>
+              <!-- Submit Row -->
+              <div class="submit-row compact-submit-row">
                 <div id="transfer-validation-msg" class="validation-msg"></div>
-                <button type="submit" id="btn-submit-transfer" class="btn btn-emerald btn-lg">
+                <button type="submit" id="btn-submit-transfer" class="btn btn-emerald btn-lg btn-block">
                   <span class="btn-icon">⚡</span> Post Transfer
                 </button>
               </div>
@@ -629,6 +631,29 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close="modal-player-statement">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Transfer Description / Note -->
+  <div class="modal-backdrop" id="modal-transfer-desc" style="display: none;">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3>Transaction Note / Memo</h3>
+        <button type="button" class="modal-close" data-close="modal-transfer-desc">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="transfer-description">Custom Description</label>
+          <input type="text" id="transfer-description" class="form-input" placeholder="Optional description / memo" />
+          <div class="text-xs text-muted mt-2" id="desc-auto-preview">
+            Standard: <span id="desc-auto-text">-</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-desc-clear-custom">Reset Auto</button>
+        <button type="button" class="btn btn-primary btn-sm" data-close="modal-transfer-desc">Done</button>
       </div>
     </div>
   </div>

@@ -331,11 +331,17 @@ function setAppMode(mode) {
   const transferCard = document.getElementById("transfer-card");
   const subviewConsole = document.getElementById("subview-console");
   const playerTransferContainer = document.getElementById("player-transfer-container");
+  const rentTab = document.querySelector(`.tab-btn[data-tab="rent"]`);
+  const payBankTab = document.querySelector(`.tab-btn[data-tab="pay-bank"]`);
   const bankPayoutTab = document.querySelector(`.tab-btn[data-tab="bank-pay"]`);
+  const customTab = document.querySelector(`.tab-btn[data-tab="custom"]`);
 
   if (mode === "player") {
-    // Hide bank payout tab
+    // Show player tabs; hide banker payout tab
     if (bankPayoutTab) bankPayoutTab.style.display = "none";
+    if (rentTab) rentTab.style.display = "inline-flex";
+    if (payBankTab) payBankTab.style.display = "inline-flex";
+    if (customTab) customTab.style.display = "inline-flex";
 
     // If currently on bank-pay tab, switch to rent
     if (STATE.activeTransferTab === "bank-pay") {
@@ -347,8 +353,16 @@ function setAppMode(mode) {
       playerTransferContainer.appendChild(transferCard);
     }
   } else {
-    // Show bank payout tab
-    if (bankPayoutTab) bankPayoutTab.style.display = "flex";
+    // In Banker Mode: only Bank Payouts and Custom Transfer
+    if (bankPayoutTab) bankPayoutTab.style.display = "inline-flex";
+    if (customTab) customTab.style.display = "inline-flex";
+    if (rentTab) rentTab.style.display = "none";
+    if (payBankTab) payBankTab.style.display = "none";
+
+    // If currently on rent or pay-bank tab, switch to bank-pay
+    if (STATE.activeTransferTab === "rent" || STATE.activeTransferTab === "pay-bank") {
+      document.querySelector(`.tab-btn[data-tab="bank-pay"]`)?.click();
+    }
 
     // Mount transfer-card in banker console
     if (transferCard && subviewConsole && transferCard.parentElement !== subviewConsole) {
@@ -735,22 +749,10 @@ function renderPlayerCards() {
 
   const curr = STATE.game.currency || "₹";
 
-  // Compute rankings based on cash
-  const sorted = [...STATE.players].sort((a, b) => b.cash - a.cash);
-  const rankMap = new Map();
-  sorted.forEach((p, idx) => {
-    if (!p.is_bankrupt) rankMap.set(p.id, idx + 1);
-  });
-
   STATE.players.forEach(p => {
-    const color = derivePlayerColor(p.seat_no);
     const card = document.createElement("div");
-    card.className = `player-card ${p.is_bankrupt ? "is-bankrupt" : ""}`;
+    card.className = `player-card compact-player-card ${p.is_bankrupt ? "is-bankrupt" : ""}`;
     card.id = `player-card-${p.id}`;
-
-    const rank = rankMap.get(p.id);
-    const rankLabel = p.is_bankrupt ? "Bankrupt" : `#${rank}`;
-    const rankClass = rank <= 3 ? `rank-${rank}` : "";
 
     // Check balance difference for animation
     const prevCash = STATE.prevBalances.get(p.id);
@@ -762,36 +764,18 @@ function renderPlayerCards() {
     STATE.prevBalances.set(p.id, p.cash);
 
     card.innerHTML = `
-      <div class="player-card-header">
-        <div class="player-header-left">
-          <div class="player-avatar" style="background-color: ${color.bg};">
-            ${p.name.charAt(0).toUpperCase()}
-          </div>
-          <div class="player-details">
-            <div class="player-name">${escapeHtml(p.name)}</div>
-            <div class="player-seat">Seat ${p.seat_no}</div>
-          </div>
+      <div class="compact-card-top">
+        <div class="compact-card-name-box">
+          <span class="compact-player-name">${escapeHtml(p.name)}</span>
+          ${p.is_bankrupt ? `<span class="bankrupt-pill">Bankrupt</span>` : ""}
         </div>
-        <div class="rank-tag ${rankClass}">${rankLabel}</div>
-      </div>
-
-      <div class="player-balance-box ${flashClass}">
-        <div class="balance-label">Cash Wallet</div>
-        <div class="balance-amount">${formatMoney(p.cash, curr)}</div>
-      </div>
-
-      <div class="player-actions-row">
-        <div class="player-action-buttons-top">
-          <button class="btn-player-pay" data-pid="${p.id}" ${p.is_bankrupt ? "disabled" : ""} title="Send money from this player">
-            <span>💸 Pay</span> <span>↗</span>
-          </button>
-          <button class="btn-player-rcv" data-pid="${p.id}" ${p.is_bankrupt ? "disabled" : ""} title="Receive money to this player">
-            <span>💰 Receive</span> <span>↙</span>
-          </button>
-        </div>
-        <button class="btn-player-stmt" data-pid="${p.id}" title="View Dr/Cr statement in Ledger Book">
-          <span>📜</span> View Statement
+        <button class="btn-player-stmt compact-stmt-btn" data-pid="${p.id}" title="View Statement">
+          <span>📜 Statement</span>
         </button>
+      </div>
+      <div class="compact-card-bottom ${flashClass}">
+        <span class="compact-wallet-label">Cash Wallet:</span>
+        <span class="compact-wallet-amount">${formatMoney(p.cash, curr)}</span>
       </div>
     `;
 
@@ -936,12 +920,14 @@ function populateTransferSelectors() {
     catSelect.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join("");
   }
 
-  // Update salary shortcut chip
+  // Update salary shortcut chip if present
   if (STATE.game) {
     const curr = STATE.game.currency || "₹";
     const chipSalary = document.getElementById("chip-salary");
-    chipSalary.textContent = `+${formatMoney(STATE.game.salary_per_round, curr)} (Salary)`;
-    chipSalary.dataset.add = STATE.game.salary_per_round;
+    if (chipSalary) {
+      chipSalary.textContent = `+${formatMoney(STATE.game.salary_per_round, curr)} (Salary)`;
+      chipSalary.dataset.add = STATE.game.salary_per_round;
+    }
   }
 
   configureTransferFormForTab(STATE.activeTransferTab);
@@ -984,7 +970,10 @@ function autoSuggestDescription() {
   const fromName = fromSelect.value === "BANK" ? "Bank" : (STATE.players.find(p => p.id === fromSelect.value)?.name || "Payer");
   const toName = toSelect.value === "BANK" ? "Bank" : (STATE.players.find(p => p.id === toSelect.value)?.name || "Recipient");
 
-  descInput.placeholder = `${catSelect.value}: ${fromName} -> ${toName}`;
+  const placeholder = `${catSelect.value}: ${fromName} -> ${toName}`;
+  if (descInput) descInput.placeholder = placeholder;
+  const autoText = document.getElementById("desc-auto-text");
+  if (autoText) autoText.textContent = placeholder;
 }
 
 function validateTransferForm() {
@@ -1423,12 +1412,39 @@ function initEventListeners() {
       synth.playCoin();
       showToast(`Transferred ${formatMoney(amount, STATE.game?.currency)} (${cat})`, "success");
       document.getElementById("transfer-amount").value = "";
-      descInput.value = "";
+      if (descInput) descInput.value = "";
+      const descDot = document.getElementById("desc-dot");
+      if (descDot) descDot.style.display = "none";
       await refreshActiveGame();
     } catch (err) {
       showToast(err.message, "error");
     }
   });
+
+  // Transfer Memo / Note Popup Button & Listeners
+  const btnOpenDesc = document.getElementById("btn-open-desc-modal");
+  const descDot = document.getElementById("desc-dot");
+  if (btnOpenDesc) {
+    btnOpenDesc.addEventListener("click", () => {
+      openModal("modal-transfer-desc");
+      setTimeout(() => document.getElementById("transfer-description")?.focus(), 150);
+    });
+  }
+
+  const descField = document.getElementById("transfer-description");
+  if (descField && descDot) {
+    descField.addEventListener("input", () => {
+      descDot.style.display = descField.value.trim() ? "inline-block" : "none";
+    });
+  }
+
+  const btnDescClear = document.getElementById("btn-desc-clear-custom");
+  if (btnDescClear && descField && descDot) {
+    btnDescClear.addEventListener("click", () => {
+      descField.value = "";
+      descDot.style.display = "none";
+    });
+  }
 
   // Player Grid delegation (Pay, Receive, Statement, Bankrupt)
   document.getElementById("player-cards-grid").addEventListener("click", async e => {
