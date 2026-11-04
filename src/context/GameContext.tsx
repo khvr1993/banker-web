@@ -17,6 +17,7 @@ interface GameContextType {
   appMode: 'banker' | 'player';
   myPlayerId: string | null;
   soundEnabled: boolean;
+  theme: 'dark' | 'light';
   toasts: ToastMessage[];
   activeModal: string | null;
   modalPayload: any;
@@ -29,6 +30,7 @@ interface GameContextType {
   closeModal: () => void;
   showToast: (message: string, type?: 'info' | 'success' | 'error', duration?: number) => void;
   toggleSound: () => void;
+  toggleTheme: () => void;
   setAppMode: (mode: 'banker' | 'player') => void;
   setMyPlayerId: (id: string | null) => void;
   loadGame: (id: string) => Promise<void>;
@@ -51,6 +53,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     return localStorage.getItem('banker_sound') !== 'false';
   });
+
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const saved = localStorage.getItem('banker_theme');
+    return saved === 'light' ? 'light' : 'dark';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.classList.toggle('light', theme === 'light');
+    root.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
 
   const [appMode, setAppModeState] = useState<'banker' | 'player'>(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -94,6 +108,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return next;
     });
   }, [showToast]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('banker_theme', next);
+      return next;
+    });
+  }, []);
 
   const setAppMode = useCallback((mode: 'banker' | 'player') => {
     setAppModeState(mode);
@@ -215,6 +237,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         appMode,
         myPlayerId,
         soundEnabled,
+        theme,
         toasts,
         activeModal: modalState.name,
         modalPayload: modalState.payload,
@@ -227,6 +250,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         closeModal,
         showToast,
         toggleSound,
+        toggleTheme,
         setAppMode,
         setMyPlayerId,
         loadGame,
