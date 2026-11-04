@@ -1,0 +1,7 @@
+{
+  "name": "Business Game Banker",
+  "description": "Digital board game banker console and player companion with double-entry ledger bookkeeping, bank float, salary rounds, and wallet passbooks.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
