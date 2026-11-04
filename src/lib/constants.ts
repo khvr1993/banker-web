@@ -1,14 +1,14 @@
 import { PaletteColor, Player } from '../types';
 
 export const PALETTE: PaletteColor[] = [
-  { name: 'Crimson', bg: '#e11d48', text: '#fff' },
-  { name: 'Royal Blue', bg: '#2563eb', text: '#fff' },
-  { name: 'Emerald', bg: '#059669', text: '#fff' },
-  { name: 'Amber', bg: '#d97706', text: '#fff' },
-  { name: 'Purple', bg: '#9333ea', text: '#fff' },
-  { name: 'Teal', bg: '#0d9488', text: '#fff' },
-  { name: 'Coral', bg: '#ea580c', text: '#fff' },
-  { name: 'Pink', bg: '#db2777', text: '#fff' },
+  { name: 'Slate', bg: '#18181b', text: '#f4f4f5' },
+  { name: 'Zinc', bg: '#1f1f23', text: '#f4f4f5' },
+  { name: 'Graphite', bg: '#27272a', text: '#f4f4f5' },
+  { name: 'Carbon', bg: '#1c1c1f', text: '#f4f4f5' },
+  { name: 'Obsidian', bg: '#222226', text: '#f4f4f5' },
+  { name: 'Iron', bg: '#26262a', text: '#f4f4f5' },
+  { name: 'Ash', bg: '#1a1a1e', text: '#f4f4f5' },
+  { name: 'Pewter', bg: '#242429', text: '#f4f4f5' },
 ];
 
 export function generateIdemKey(prefix = 'txn'): string {

@@ -34,36 +34,32 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
   useEffect(() => {
     if (targetPlayerId) {
       setToAccount(targetPlayerId);
+      setCategory('RENT');
     }
   }, [targetPlayerId]);
 
   // Adjust options and defaults when tab or mode changes
   useEffect(() => {
+    const activePlayers = players.filter((p) => !p.is_bankrupt);
     if (isPlayerMode && me) {
       setFromAccount(me.id);
-      if (activeTransferTab === 'rent') {
-        setCategory('RENT');
-        // If to is BANK, switch to first other player
-        if (toAccount === 'BANK') {
-          const other = players.find((p) => p.id !== me.id && !p.is_bankrupt);
-          if (other) setToAccount(other.id);
-        }
-      } else if (activeTransferTab === 'pay-bank') {
-        setToAccount('BANK');
-        if (!['INCOME_TAX', 'FINE', 'PROPERTY_PURCHASE', 'BUILD', 'EXPENSE'].includes(category)) {
-          setCategory('INCOME_TAX');
-        }
+      if (toAccount === me.id) {
+        const other = activePlayers.find((p) => p.id !== me.id);
+        setToAccount(other ? other.id : 'BANK');
       }
     } else {
-      // Banker mode
+      // Banker mode: only 'bank-pay' and 'custom'
       if (activeTransferTab === 'bank-pay') {
         setFromAccount('BANK');
         if (!['SALARY', 'LOAN', 'MORTGAGE', 'INCOME', 'GIFT'].includes(category)) {
           setCategory('SALARY');
         }
-        if (toAccount === 'BANK') {
-          const firstPl = players.find((p) => !p.is_bankrupt);
-          if (firstPl) setToAccount(firstPl.id);
+        if (toAccount === 'BANK' && activePlayers.length > 0) {
+          setToAccount(activePlayers[0].id);
+        }
+      } else {
+        if (fromAccount === toAccount && activePlayers.length > 0) {
+          setToAccount(fromAccount === 'BANK' ? activePlayers[0].id : 'BANK');
         }
       }
     }
@@ -84,23 +80,12 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
 
   // Compute helper text
   const helperText = useMemo(() => {
-    switch (activeTransferTab) {
-      case 'rent':
-        return isPlayerMode
-          ? 'Pay rent to another player for landing on their property'
-          : 'Bob pays Alice for landing on her property (RENT category)';
-      case 'pay-bank':
-        return isPlayerMode
-          ? 'Pay Bank drawer for Taxes, Fines, or Buying properties'
-          : 'Player pays Bank drawer for Taxes, Fines, or Buying properties';
-      case 'bank-pay':
-        return 'Bank drawer funds a player (Salary, Bonus, Mortgage, Loan)';
-      case 'custom':
-      default:
-        return isPlayerMode
-          ? 'Send money from your wallet to any counterparty'
-          : 'Free-form transfer between any accounts and categories';
+    if (isPlayerMode) {
+      return 'Send funds from your wallet to another player or Bank Reserve';
     }
+    return activeTransferTab === 'bank-pay'
+      ? 'Disburse funds from Bank Reserve to a player'
+      : 'Transfer between any accounts and categories';
   }, [activeTransferTab, isPlayerMode]);
 
   // Auto-suggested description placeholder
@@ -118,7 +103,7 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
     validationError = 'Payer and Recipient cannot be the same account';
   } else if (numAmount > fromBalance) {
     if (fromAccount === 'BANK') {
-      validationError = `Bank drawer has insufficient funds (Deficit: ${formatMoney(numAmount - fromBalance, curr)})`;
+      validationError = `Bank reserve has insufficient funds (Deficit: ${formatMoney(numAmount - fromBalance, curr)})`;
     } else {
       validationError = `Insufficient cash (Player has ${formatMoney(fromBalance, curr)}, deficit ${formatMoney(numAmount - fromBalance, curr)})`;
     }
@@ -172,29 +157,7 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
       <div className="card-header tab-header">
         <div className="tabs-nav">
           {isPlayerMode ? (
-            <>
-              <button
-                type="button"
-                className={`tab-btn ${activeTransferTab === 'rent' ? 'active' : ''}`}
-                onClick={() => setActiveTransferTab('rent')}
-              >
-                <span className="tab-icon">🏠</span> Pay Rent
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${activeTransferTab === 'pay-bank' ? 'active' : ''}`}
-                onClick={() => setActiveTransferTab('pay-bank')}
-              >
-                <span className="tab-icon">🏛️</span> Pay Bank (Tax/Fine/Buy)
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${activeTransferTab === 'custom' ? 'active' : ''}`}
-                onClick={() => setActiveTransferTab('custom')}
-              >
-                <span className="tab-icon">🔄</span> Custom Transfer
-              </button>
-            </>
+            <span className="transfer-card-title">Send Payment</span>
           ) : (
             <>
               <button
@@ -202,28 +165,14 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
                 className={`tab-btn ${activeTransferTab === 'bank-pay' ? 'active' : ''}`}
                 onClick={() => setActiveTransferTab('bank-pay')}
               >
-                <span className="tab-icon">💰</span> Bank Payout (Salary/Loan)
+                Bank Payout
               </button>
               <button
                 type="button"
                 className={`tab-btn ${activeTransferTab === 'custom' ? 'active' : ''}`}
                 onClick={() => setActiveTransferTab('custom')}
               >
-                <span className="tab-icon">🔄</span> Custom Transfer
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${activeTransferTab === 'rent' ? 'active' : ''}`}
-                onClick={() => setActiveTransferTab('rent')}
-              >
-                <span className="tab-icon">🏠</span> Pay Rent
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${activeTransferTab === 'pay-bank' ? 'active' : ''}`}
-                onClick={() => setActiveTransferTab('pay-bank')}
-              >
-                <span className="tab-icon">🏛️</span> Pay Bank
+                Custom Transfer
               </button>
             </>
           )}
@@ -236,80 +185,76 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
       <div className="card-body">
         <form id="form-transfer" autoComplete="off" onSubmit={handleSubmit}>
           {/* Flow Selector Row */}
-          <div className="transfer-flow-row">
-            {/* From Selector */}
-            <div className="form-group flow-entity" id="flow-from-group">
-              <label className="flow-label">From (Payer)</label>
-              <select
-                id="transfer-from-select"
-                className="form-select flow-select"
-                value={fromAccount}
-                disabled={isPlayerMode || activeTransferTab === 'bank-pay'}
-                onChange={(e) => setFromAccount(e.target.value)}
-                required
-              >
-                {isPlayerMode && me ? (
-                  <option value={me.id}>👤 {me.name} (You - Locked)</option>
-                ) : (
-                  <>
-                    <option value="BANK">🏛️ Bank Drawer</option>
+          <div className={`transfer-flow-row ${isPlayerMode ? 'player-mode-flow' : ''}`}>
+            {!isPlayerMode && (
+              <>
+                {/* From Selector */}
+                <div className="form-group flow-entity" id="flow-from-group">
+                  <label className="flow-label" htmlFor="transfer-from-select">From (Payer)</label>
+                  <select
+                    id="transfer-from-select"
+                    className="form-select flow-select"
+                    value={fromAccount}
+                    disabled={activeTransferTab === 'bank-pay'}
+                    onChange={(e) => setFromAccount(e.target.value)}
+                    required
+                  >
+                    <option value="BANK">Bank Reserve</option>
                     {players
                       .filter((p) => !p.is_bankrupt)
                       .map((p) => (
                         <option key={p.id} value={p.id}>
-                          👤 {p.name}
+                          {p.name}
                         </option>
                       ))}
-                  </>
-                )}
-              </select>
-              <div className="balance-hint" id="from-balance-hint">
-                Balance: {formatMoney(fromBalance, curr)}
-              </div>
-            </div>
+                  </select>
+                  <div className="balance-hint mono-num" id="from-balance-hint">
+                    Available: {formatMoney(fromBalance, curr)}
+                  </div>
+                </div>
 
-            {/* Arrow Icon */}
-            <div className="flow-arrow">
-              <div className="arrow-circle">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M5 12h14M12 5l7 7-7 7" />
-                </svg>
-              </div>
-            </div>
+                {/* Compact Inline Arrow */}
+                <div className="flow-arrow" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </div>
+              </>
+            )}
 
             {/* To Selector */}
             <div className="form-group flow-entity" id="flow-to-group">
-              <label className="flow-label">To (Recipient)</label>
+              <label className="flow-label" htmlFor="transfer-to-select">To (Recipient)</label>
               <select
                 id="transfer-to-select"
                 className="form-select flow-select"
                 value={toAccount}
-                disabled={activeTransferTab === 'pay-bank'}
                 onChange={(e) => setToAccount(e.target.value)}
                 required
               >
-                {activeTransferTab !== 'rent' && <option value="BANK">🏛️ Bank Drawer</option>}
+                {(isPlayerMode || activeTransferTab === 'custom') && (
+                  <option value="BANK">Bank Reserve</option>
+                )}
                 {players
                   .filter((p) => !p.is_bankrupt && (isPlayerMode ? p.id !== me?.id : true))
                   .map((p) => (
                     <option key={p.id} value={p.id}>
-                      👤 {p.name}
+                      {p.name}
                     </option>
                   ))}
               </select>
-              <div className="balance-hint" id="to-balance-hint">
-                Balance: {formatMoney(toBalance, curr)}
+              <div className="balance-hint mono-num" id="to-balance-hint">
+                Available: {formatMoney(toBalance, curr)}
               </div>
             </div>
 
             {/* Category */}
             <div className="form-group flow-category" id="flow-cat-group">
-              <label className="flow-label">Category</label>
+              <label className="flow-label" htmlFor="transfer-category-select">Category</label>
               <select
                 id="transfer-category-select"
                 className="form-select flow-select"
                 value={category}
-                disabled={activeTransferTab === 'rent'}
                 onChange={(e) => setCategory(e.target.value)}
               >
                 {ACCOUNT_CATEGORIES.map((c) => (
@@ -329,11 +274,11 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
               </label>
               <div className="amount-with-note">
                 <div className="input-with-sym">
-                  <span className="sym-prefix">{curr}</span>
+                  <span className="sym-prefix mono-num">{curr}</span>
                   <input
                     type="number"
                     id="transfer-amount"
-                    className="form-input amount-input"
+                    className="form-input amount-input mono-num"
                     placeholder="0"
                     min="1"
                     step="1"
@@ -349,8 +294,7 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
                   title="Add / View memo description"
                   onClick={() => openModal('transfer-desc', { autoDesc })}
                 >
-                  <span>📝</span>
-                  <span className="note-label">Note</span>
+                  <span className="note-label">Memo</span>
                   {customDesc && <span id="desc-dot" className="desc-dot" style={{ display: 'inline-block' }} />}
                 </button>
               </div>
@@ -358,13 +302,13 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
 
             {/* Quick Amount Chips */}
             <div className="quick-amount-chips">
-              <button type="button" className="chip-btn" onClick={() => handleQuickAdd(100)}>
+              <button type="button" className="chip-btn mono-num" onClick={() => handleQuickAdd(100)}>
                 +100
               </button>
-              <button type="button" className="chip-btn" onClick={() => handleQuickAdd(500)}>
+              <button type="button" className="chip-btn mono-num" onClick={() => handleQuickAdd(500)}>
                 +500
               </button>
-              <button type="button" className="chip-btn" onClick={() => handleQuickAdd(1000)}>
+              <button type="button" className="chip-btn mono-num" onClick={() => handleQuickAdd(1000)}>
                 +1k
               </button>
               <button type="button" className="chip-btn chip-clear" id="chip-clear" onClick={handleClearAmount}>
@@ -384,7 +328,7 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
               className="btn btn-emerald btn-lg btn-block"
               disabled={!isValid}
             >
-              <span className="btn-icon">⚡</span> Post Transfer
+              Post Transfer
             </button>
           </div>
         </form>

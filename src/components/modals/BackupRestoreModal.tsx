@@ -37,7 +37,7 @@ export const BackupRestoreModal: React.FC = () => {
   };
 
   return (
-    <div className="modal-backdrop" id="modal-backup" style={{ display: 'flex' }}>
+    <div className="modal-backdrop" id="modal-backup">
       <div className="modal-dialog">
         <div className="modal-header">
           <h3>Backup &amp; Restore</h3>
@@ -46,14 +46,13 @@ export const BackupRestoreModal: React.FC = () => {
           </button>
         </div>
         <div className="modal-body">
-          <p className="text-muted text-xs" style={{ lineHeight: 1.6 }}>
-            Games live in this browser&apos;s storage on this device — there is no server.
-            Download a backup file before clearing browser data, switching devices, or reinstalling.
+          <p className="text-muted text-sm">
+            Sessions are stored locally in this browser&apos;s IndexedDB storage. Export a JSON snapshot before clearing browser data or migrating devices.
           </p>
 
-          <div className="backup-actions mt-3" style={{ display: 'grid', gap: '10px' }}>
+          <div className="backup-actions mt-4">
             <button className="btn btn-primary" id="btn-export-backup" onClick={handleExport}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
               <span>Download Backup (.json)</span>
@@ -64,7 +63,7 @@ export const BackupRestoreModal: React.FC = () => {
               id="btn-import-backup"
               onClick={() => fileInputRef.current?.click()}
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
               </svg>
               <span>Restore from Backup File…</span>
@@ -79,20 +78,8 @@ export const BackupRestoreModal: React.FC = () => {
             />
           </div>
 
-          <div
-            className="text-xs text-muted"
-            style={{
-              lineHeight: 1.7,
-              background: '#0f172a',
-              padding: '12px',
-              borderRadius: '8px',
-              border: '1px solid #1e293b',
-              marginTop: '12px',
-            }}
-          >
-            <strong style={{ color: '#fbbf24' }}>⚠ Before restoring:</strong> restoring{' '}
-            <strong>replaces everything</strong> currently in the app. Your current games will be overwritten by the
-            backup. This cannot be undone.
+          <div className="backup-notice mt-4">
+            <strong>Overwrite Warning:</strong> Restoring replaces all existing sessions in this browser with the contents of the backup file.
           </div>
         </div>
         <div className="modal-footer">

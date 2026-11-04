@@ -31,7 +31,7 @@ export const GamesListModal: React.FC = () => {
   );
 
   return (
-    <div className="modal-backdrop" id="modal-games-list" style={{ display: 'flex' }}>
+    <div className="modal-backdrop" id="modal-games-list">
       <div className="modal-dialog">
         <div className="modal-header">
           <h3>Game Sessions</h3>
@@ -45,7 +45,7 @@ export const GamesListModal: React.FC = () => {
               type="text"
               id="search-games"
               className="form-input"
-              placeholder="Search games..."
+              placeholder="Search sessions..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -64,7 +64,7 @@ export const GamesListModal: React.FC = () => {
               <div className="text-ruby text-center p-4">{error}</div>
             ) : filteredGames.length === 0 ? (
               <div className="text-muted text-center p-4">
-                No games found. Click &quot;+ New Game&quot; to start one!
+                No sessions found. Click &quot;+ New Game&quot; to start one.
               </div>
             ) : (
               filteredGames.map((g) => {
@@ -72,26 +72,26 @@ export const GamesListModal: React.FC = () => {
                 return (
                   <div
                     key={g.id}
-                    className="lobby-player-row mb-2"
-                    style={{ marginBottom: '8px' }}
+                    className="lobby-player-row"
                   >
                     <div>
-                      <strong style={{ color: '#fff' }}>{g.name}</strong>
-                      <span className={`status-badge ${g.status} ml-2`}>
-                        {g.status.toUpperCase()}
-                      </span>
-                      <div className="text-xs text-muted">
-                        Round {g.current_round} • Drawer: {formatMoney(g.bank_balance, g.currency)}
+                      <div className="session-row-title">
+                        <strong>{g.name}</strong>
+                        <span className="metric-sep" aria-hidden="true">·</span>
+                        <span className={`status-text ${g.status}`}>{g.status}</span>
+                      </div>
+                      <div className="text-xs text-muted mono-num">
+                        Round {g.current_round} · Reserve: {formatMoney(g.bank_balance, g.currency)}
                       </div>
                     </div>
                     <button
-                      className={`btn ${isCurrent ? 'btn-emerald' : 'btn-secondary'} btn-xs btn-pick-game`}
+                      className={`btn ${isCurrent ? 'btn-primary' : 'btn-secondary'} btn-xs btn-pick-game`}
                       onClick={() => {
                         closeModal();
                         loadGame(g.id);
                       }}
                     >
-                      {isCurrent ? 'Current' : 'Open'}
+                      {isCurrent ? 'Active' : 'Open'}
                     </button>
                   </div>
                 );

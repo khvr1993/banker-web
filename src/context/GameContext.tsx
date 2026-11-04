@@ -45,7 +45,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [bankInfo, setBankInfo] = useState<BankInfo | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [modalState, setModalState] = useState<ModalState>({ name: null, payload: null });
-  const [activeTransferTab, setActiveTransferTab] = useState<string>('rent');
+  const [activeTransferTab, setActiveTransferTab] = useState<string>('bank-pay');
   const [customDesc, setCustomDesc] = useState<string>('');
 
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -99,9 +99,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAppModeState(mode);
     localStorage.setItem('banker_app_mode', mode);
     if (mode === 'banker') {
-      setActiveTransferTab((prev) => (prev === 'rent' || prev === 'pay-bank' ? 'bank-pay' : prev));
+      setActiveTransferTab((prev) => (prev !== 'bank-pay' && prev !== 'custom' ? 'bank-pay' : prev));
     } else {
-      setActiveTransferTab((prev) => (prev === 'bank-pay' ? 'rent' : prev));
+      setActiveTransferTab('custom');
     }
   }, []);
 

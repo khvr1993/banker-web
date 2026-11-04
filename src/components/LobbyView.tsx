@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
-import { formatMoney, deriveNextSeat, derivePlayerColor } from '../lib/constants';
+import { formatMoney, deriveNextSeat } from '../lib/constants';
 import { localApi } from '../lib/api';
 import { sound } from '../lib/sound';
 
@@ -13,7 +13,6 @@ export const LobbyView: React.FC = () => {
 
   const curr = game.currency || '₹';
   const nextSeat = deriveNextSeat(players);
-  const color = derivePlayerColor(nextSeat);
 
   const handleAddPlayer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,18 +62,18 @@ export const LobbyView: React.FC = () => {
   };
 
   return (
-    <section id="view-lobby" className="view-panel" style={{ display: 'flex' }}>
+    <section id="view-lobby" className="view-panel">
       <div className="panel-header">
         <div>
-          <span className="badge badge-warning">LOBBY / SETUP</span>
+          <div className="section-kicker">Session Setup · Pending</div>
           <h2 id="lobby-game-title">{game.name}</h2>
           <p className="text-muted">
-            Seat all players around the table before starting. Cash will be distributed once the game starts.
+            Seat all players around the table before starting. Starting cash is distributed from the bank reserve once the session begins.
           </p>
         </div>
         <div className="panel-actions">
-          <button id="btn-start-game" className="btn btn-emerald btn-lg" onClick={handleStartGame}>
-            🚀 Start Game & Pay Cash
+          <button id="btn-start-game" className="btn btn-primary btn-lg" onClick={handleStartGame}>
+            Start Game &amp; Distribute Cash
           </button>
         </div>
       </div>
@@ -83,18 +82,18 @@ export const LobbyView: React.FC = () => {
       <div className="summary-cards-grid">
         <div className="summary-card">
           <span className="label">Starting Cash</span>
-          <strong id="lobby-starting-cash">{formatMoney(game.starting_cash, curr)}</strong>
-          <span className="subtext">Given to each player at start</span>
+          <strong className="mono-num" id="lobby-starting-cash">{formatMoney(game.starting_cash, curr)}</strong>
+          <span className="subtext">Allocated per seated player</span>
         </div>
         <div className="summary-card">
-          <span className="label">Initial Bank Float</span>
-          <strong id="lobby-bank-balance">{formatMoney(game.initial_bank_balance, curr)}</strong>
-          <span className="subtext">Drawer money supply</span>
+          <span className="label">Initial Bank Reserve</span>
+          <strong className="mono-num" id="lobby-bank-balance">{formatMoney(game.initial_bank_balance, curr)}</strong>
+          <span className="subtext">Total drawer liquidity</span>
         </div>
         <div className="summary-card">
           <span className="label">Round Salary</span>
-          <strong id="lobby-round-salary">{formatMoney(game.salary_per_round, curr)}</strong>
-          <span className="subtext">Paid when advancing rounds</span>
+          <strong className="mono-num" id="lobby-round-salary">{formatMoney(game.salary_per_round, curr)}</strong>
+          <span className="subtext">Configured pass payout</span>
         </div>
       </div>
 
@@ -102,39 +101,33 @@ export const LobbyView: React.FC = () => {
       <div className="lobby-grid">
         <div className="card lobby-players-card">
           <div className="card-header">
-            <h3>Seated Players (<span id="lobby-player-count">{players.length}</span>)</h3>
-            <span className="text-muted text-sm">Need at least 1 player to start</span>
+            <h3>Seated Players (<span id="lobby-player-count" className="mono-num">{players.length}</span>)</h3>
+            <span className="text-muted text-xs">Minimum 2 players required</span>
           </div>
           <div className="card-body">
             <div id="lobby-players-list" className="lobby-players-list">
               {players.length === 0 ? (
                 <div className="text-muted text-center p-4">
-                  No players seated yet. Add at least 1 player below.
+                  No players seated yet. Add players using the form on the right.
                 </div>
               ) : (
-                players.map((p) => {
-                  const pColor = derivePlayerColor(p.seat_no);
-                  return (
-                    <div key={p.id} className="lobby-player-row">
-                      <div className="lobby-player-left">
-                        <div className="player-avatar" style={{ backgroundColor: pColor.bg, color: pColor.text }}>
-                          {p.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <strong>{p.name}</strong>
-                          <div className="text-xs text-muted">Seat {p.seat_no}</div>
-                        </div>
+                players.map((p) => (
+                  <div key={p.id} className="lobby-player-row">
+                    <div className="lobby-player-left">
+                      <div>
+                        <strong>{p.name}</strong>
+                        <div className="text-xs text-muted">Seat {p.seat_no}</div>
                       </div>
-                      <button
-                        className="btn btn-ghost btn-xs btn-remove-player"
-                        onClick={() => handleRemovePlayer(p.id)}
-                        title="Remove player"
-                      >
-                        Remove
-                      </button>
                     </div>
-                  );
-                })
+                    <button
+                      className="btn btn-ghost btn-xs btn-remove-player"
+                      onClick={() => handleRemovePlayer(p.id)}
+                      title={`Remove ${p.name}`}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))
               )}
             </div>
           </div>
@@ -162,20 +155,11 @@ export const LobbyView: React.FC = () => {
               </div>
               <div className="derived-info-box">
                 <div className="info-row">
-                  <span>Assigned Seat:</span>
-                  <strong id="derived-seat-no">Seat {nextSeat}</strong>
-                </div>
-                <div className="info-row">
-                  <span>Assigned Color:</span>
-                  <div
-                    className="color-preview"
-                    id="derived-color-preview"
-                    style={{ backgroundColor: color.bg }}
-                    title={color.name}
-                  />
+                  <span>Assigned Seat</span>
+                  <strong className="mono-num" id="derived-seat-no">Seat {nextSeat}</strong>
                 </div>
               </div>
-              <button type="submit" className="btn btn-primary btn-block" disabled={submitting}>
+              <button type="submit" className="btn btn-secondary btn-block" disabled={submitting}>
                 + Seat Player
               </button>
             </form>

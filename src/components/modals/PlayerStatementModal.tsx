@@ -34,12 +34,12 @@ export const PlayerStatementModal: React.FC = () => {
   if (!player) return null;
 
   return (
-    <div className="modal-backdrop" id="modal-player-statement" style={{ display: 'flex' }}>
+    <div className="modal-backdrop" id="modal-player-statement">
       <div className="modal-dialog modal-lg">
         <div className="modal-header">
           <div>
             <h3 id="stmt-player-name">{player.name}&apos;s Statement</h3>
-            <span className="text-muted text-sm" id="stmt-player-balance">
+            <span className="text-muted text-sm mono-num" id="stmt-player-balance">
               Balance: {formatMoney(player.cash, curr)}
             </span>
           </div>
@@ -85,25 +85,23 @@ export const PlayerStatementModal: React.FC = () => {
                     const timeStr = r.created_at ? r.created_at.split('T')[1]?.substring(0, 8) : '';
                     const counterpartyName =
                       r.counterparty === 'BANK'
-                        ? '🏛️ Bank'
+                        ? 'Bank Reserve'
                         : players.find((p) => p.id === r.counterparty)?.name || r.counterparty || '-';
 
                     return (
                       <tr key={r.txn_id} className={r.voided ? 'is-voided' : ''}>
-                        <td className="text-xs text-muted">{timeStr}</td>
+                        <td className="text-xs text-muted mono-num">{timeStr}</td>
+                        <td className="mono-num text-muted">R{r.round}</td>
                         <td>
-                          <span className="badge badge-info">R{r.round}</span>
+                          <span className="category-text mono-num">{r.account_category}</span>
                         </td>
                         <td>
-                          <span className={`category-tag cat-${r.account_category}`}>{r.account_category}</span>
+                          <span className="counterparty-text">{counterpartyName}</span>
                         </td>
-                        <td>
-                          <span className="counterparty-pill">{counterpartyName}</span>
-                        </td>
-                        <td style={{ textAlign: 'right' }} className={r.dr > 0 ? 'amount-dr' : 'text-dim'}>
+                        <td style={{ textAlign: 'right' }} className={`mono-num ${r.dr > 0 ? 'amount-dr' : 'text-dim'}`}>
                           {r.dr > 0 ? formatMoney(r.dr, curr) : '-'}
                         </td>
-                        <td style={{ textAlign: 'right' }} className={r.cr > 0 ? 'amount-cr' : 'text-dim'}>
+                        <td style={{ textAlign: 'right' }} className={`mono-num ${r.cr > 0 ? 'amount-cr' : 'text-dim'}`}>
                           {r.cr > 0 ? formatMoney(r.cr, curr) : '-'}
                         </td>
                         <td className="text-xs text-muted">{r.description || '-'}</td>

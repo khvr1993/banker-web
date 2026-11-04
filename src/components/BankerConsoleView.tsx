@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useGame } from '../context/GameContext';
-import { formatMoney, generateIdemKey } from '../lib/constants';
+import { formatMoney } from '../lib/constants';
 import { localApi, downloadGameCsv } from '../lib/api';
-import { sound } from '../lib/sound';
 import { TransferCard } from './TransferCard';
 
 export const BankerConsoleView: React.FC = () => {
@@ -53,22 +52,6 @@ export const BankerConsoleView: React.FC = () => {
   const curr = game.currency || '₹';
   const activeCount = players.filter((p) => !p.is_bankrupt).length;
 
-  const handleNextRound = async () => {
-    try {
-      const nextRound = (game.current_round || 0) + 1;
-      const idemKey = generateIdemKey(`round-${nextRound}`);
-      await localApi(`/games/${game.id}/rounds`, {
-        method: 'POST',
-        headers: { 'Idempotency-Key': idemKey },
-      });
-      sound.playRoundBell();
-      showToast(`Round ${nextRound} started! Salary paid to all active players.`, 'success');
-      await refreshActiveGame();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to start next round', 'error');
-    }
-  };
-
   const handleFinishGame = async () => {
     if (!window.confirm('Are you sure you want to finish this game? The ledger will become read-only.')) return;
     try {
@@ -104,7 +87,7 @@ export const BankerConsoleView: React.FC = () => {
   }, [transactions, filterRound, filterCategory, showVoided, filterPlayer]);
 
   return (
-    <section id="view-active" className="view-panel" style={{ display: 'flex' }}>
+    <section id="view-active" className="view-panel">
       {/* Main Navigation Tabs */}
       <div className="main-view-tabs">
         <button
@@ -112,7 +95,7 @@ export const BankerConsoleView: React.FC = () => {
           id="tab-btn-console"
           onClick={() => setActiveTab('console')}
         >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
             <line x1="8" y1="21" x2="16" y2="21" />
             <line x1="12" y1="17" x2="12" y2="21" />
@@ -125,12 +108,12 @@ export const BankerConsoleView: React.FC = () => {
           id="tab-btn-ledger"
           onClick={() => setActiveTab('ledger')}
         >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
           </svg>
           <span>Ledger Book</span>
-          <span className="tab-badge" id="tab-ledger-count">
+          <span className="tab-count mono-num" id="tab-ledger-count">
             {transactions.length}
           </span>
         </button>
@@ -138,13 +121,13 @@ export const BankerConsoleView: React.FC = () => {
 
       {/* Subview 1: Banker Console */}
       {activeTab === 'console' && (
-        <div id="subview-console" className="subview-content" style={{ display: 'flex' }}>
+        <div id="subview-console" className="subview-content">
           {/* Game Status Banner if Finished */}
           {game.status === 'finished' && (
-            <div id="finished-banner" className="finished-banner" style={{ display: 'flex' }}>
+            <div id="finished-banner" className="finished-banner">
               <div>
-                <h3>🏁 Game Finished & Archived</h3>
-                <p>The ledger is now read-only. Review final balances and export audit logs below.</p>
+                <h3>Session Archived</h3>
+                <p>The double-entry ledger is now locked in read-only mode. Review final balances or export audit records.</p>
               </div>
               <button id="btn-export-csv-banner" className="btn btn-secondary btn-sm" onClick={handleExportCsv}>
                 Download CSV
@@ -155,14 +138,14 @@ export const BankerConsoleView: React.FC = () => {
           {/* Top Row: Players Leaderboard & Wallet Grid */}
           <div className="section-heading">
             <div className="heading-with-badge">
-              <h2>Player Wallets & Balances</h2>
-              <span className="badge badge-info" id="active-players-badge">
-                {activeCount} Active / {players.length} Total
+              <h2>Player Wallets &amp; Balances</h2>
+              <span className="meta-inline" id="active-players-badge">
+                {activeCount} Active · {players.length} Total
               </span>
             </div>
             <div className="heading-actions">
-              <button id="btn-export-csv" className="btn btn-ghost btn-sm" title="Download Ledger CSV" onClick={handleExportCsv}>
-                📥 Export CSV
+              <button id="btn-export-csv" className="btn btn-secondary btn-sm" title="Download Ledger CSV" onClick={handleExportCsv}>
+                Export CSV
               </button>
               {game.status === 'active' && (
                 <button
@@ -190,18 +173,19 @@ export const BankerConsoleView: React.FC = () => {
                   <div className="compact-card-top">
                     <div className="compact-card-name-box">
                       <span className="compact-player-name">{p.name}</span>
+                      <span className="seat-meta">Seat {p.seat_no}</span>
                     </div>
                     <button
                       className="compact-stmt-btn"
                       onClick={() => openModal('player-statement', { player: p })}
-                      title="View Statement"
+                      title={`View Statement for ${p.name}`}
                     >
-                      <span>📜 Statement</span>
+                      Statement
                     </button>
                   </div>
                   <div className={`compact-card-bottom ${flash}`}>
-                    <span className="compact-wallet-label">Cash Wallet:</span>
-                    <span className="compact-wallet-amount">{formatMoney(p.cash, curr)}</span>
+                    <span className="compact-wallet-label">Cash Balance</span>
+                    <span className="compact-wallet-amount mono-num">{formatMoney(p.cash, curr)}</span>
                   </div>
                 </div>
               );
@@ -215,17 +199,17 @@ export const BankerConsoleView: React.FC = () => {
 
       {/* Subview 2: Dedicated Ledger Book Tab */}
       {activeTab === 'ledger' && (
-        <div id="subview-ledger" className="subview-content" style={{ display: 'flex' }}>
+        <div id="subview-ledger" className="subview-content">
           <div className="section-heading">
             <div className="heading-with-badge">
               <h2>Ledger Book</h2>
-              <span className="badge badge-info" id="ledger-count-label">
+              <span className="meta-inline mono-num" id="ledger-count-label">
                 {filteredTransactions.length} transactions
               </span>
             </div>
             <div className="heading-actions">
               <button id="btn-export-csv-tab" className="btn btn-secondary btn-sm" title="Download CSV" onClick={handleExportCsv}>
-                📥 Export CSV
+                Export CSV
               </button>
             </div>
           </div>
@@ -233,7 +217,7 @@ export const BankerConsoleView: React.FC = () => {
           <div className="card ledger-card">
             <div className="card-header ledger-header">
               <div className="ledger-title-box">
-                <span className="text-muted text-sm">Full audit trail of all money movements and round salaries</span>
+                <span className="text-muted text-sm">Double-entry audit log of all account debits and credits</span>
               </div>
 
               {/* Filters */}
@@ -275,7 +259,7 @@ export const BankerConsoleView: React.FC = () => {
                   <option value="">All Counterparties</option>
                   {players.map((p) => (
                     <option key={p.id} value={p.id}>
-                      👤 {p.name}
+                      {p.name}
                     </option>
                   ))}
                 </select>
@@ -297,10 +281,10 @@ export const BankerConsoleView: React.FC = () => {
                 <table className="ledger-table" id="ledger-table">
                   <thead>
                     <tr>
-                      <th style={{ width: '90px' }}>Time</th>
+                      <th style={{ width: '100px' }}>Time</th>
                       <th style={{ width: '70px' }}>Round</th>
-                      <th style={{ width: '140px' }}>Category</th>
-                      <th>Counterparties (Dr & Cr)</th>
+                      <th style={{ width: '160px' }}>Category</th>
+                      <th>Counterparties (Dr → Cr)</th>
                       <th style={{ width: '130px', textAlign: 'right' }}>Amount</th>
                       <th>Description</th>
                       <th style={{ width: '90px', textAlign: 'center' }}>Action</th>
@@ -323,27 +307,27 @@ export const BankerConsoleView: React.FC = () => {
                           if (e.direction === 'CR') crRef = e.account_ref;
                         });
 
-                        const drName = drRef === 'BANK' ? '🏛️ Bank' : players.find((p) => p.id === drRef)?.name || drRef;
-                        const crName = crRef === 'BANK' ? '🏛️ Bank' : players.find((p) => p.id === crRef)?.name || crRef;
+                        const drName = drRef === 'BANK' ? 'Bank Reserve' : players.find((p) => p.id === drRef)?.name || drRef;
+                        const crName = crRef === 'BANK' ? 'Bank Reserve' : players.find((p) => p.id === crRef)?.name || crRef;
                         const timeStr = t.created_at ? t.created_at.split('T')[1]?.substring(0, 8) : '';
 
                         return (
                           <tr key={t.id} className={isVoided ? 'is-voided' : ''}>
-                            <td className="text-xs text-muted">{timeStr}</td>
+                            <td className="text-xs text-muted mono-num">{timeStr}</td>
+                            <td className="mono-num text-muted">R{t.round}</td>
                             <td>
-                              <span className="badge badge-info">R{t.round}</span>
-                            </td>
-                            <td>
-                              <span className={`category-tag cat-${t.account_category}`}>{t.account_category}</span>
+                              <span className="category-text mono-num">{t.account_category}</span>
                             </td>
                             <td>
                               <div className="flow-pill-container">
-                                <span className="counterparty-pill">{drName}</span>
-                                <span className="text-muted">➔</span>
-                                <span className="counterparty-pill">{crName}</span>
+                                <span className="counterparty-text">{drName}</span>
+                                <span className="text-dim" aria-hidden="true">→</span>
+                                <span className="counterparty-text">{crName}</span>
                               </div>
                             </td>
-                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatMoney(t.amount, curr)}</td>
+                            <td className="mono-num" style={{ textAlign: 'right', fontWeight: 600 }}>
+                              {formatMoney(t.amount, curr)}
+                            </td>
                             <td className="text-xs text-muted">{t.description || '-'}</td>
                             <td style={{ textAlign: 'center' }}>
                               {!isVoided && game.status === 'active' ? (
@@ -355,7 +339,7 @@ export const BankerConsoleView: React.FC = () => {
                                   Void
                                 </button>
                               ) : isVoided ? (
-                                <span className="badge badge-warning text-xs">Voided</span>
+                                <span className="voided-text">Voided</span>
                               ) : (
                                 '-'
                               )}

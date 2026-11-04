@@ -22,26 +22,22 @@ export const Header: React.FC = () => {
     <header className="top-nav">
       <div className="nav-top-row">
         <div className="nav-brand">
-          <div className="logo-icon">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+          <div className="logo-icon" title="Banker Console" aria-label="Banker Console">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75">
               <path d="M3 21h18M3 10h18M5 10v11M9 10v11M15 10v11M19 10v11M12 2L2 7h20L12 2z" />
             </svg>
           </div>
-          <div>
-            <h1 className="app-title">Banker Console</h1>
-            <span className="app-subtitle" id="connection-status">Offline-ready</span>
-          </div>
         </div>
 
-        {/* Utilities (Backup, Sound, Games, New Game, Mode Toggle) */}
+        {/* Workspace Navigation & Actions */}
         <div className="nav-actions">
           <button
             id="btn-backup"
-            className="btn btn-ghost btn-sm btn-icon-mobile"
+            className="btn btn-ghost btn-sm"
             title="Backup or restore your games (stored in this browser)"
             onClick={() => openModal('backup')}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
             </svg>
             <span className="btn-text">Backup</span>
@@ -51,15 +47,16 @@ export const Header: React.FC = () => {
             id="btn-toggle-sound"
             className="btn btn-ghost btn-sm"
             title="Toggle audio cues"
+            aria-label="Toggle audio cues"
             onClick={toggleSound}
           >
             {soundEnabled ? (
-              <svg id="sound-icon-on" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg id="sound-icon-on" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                 <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
               </svg>
             ) : (
-              <svg id="sound-icon-off" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg id="sound-icon-off" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                 <line x1="23" y1="9" x2="17" y2="15" />
                 <line x1="17" y1="9" x2="23" y2="15" />
@@ -90,53 +87,71 @@ export const Header: React.FC = () => {
           {game && (
             <button
               id="btn-toggle-mode"
-              className={`btn btn-sm mode-toggle-btn ${isPlayerMode ? 'btn-secondary' : 'btn-emerald'}`}
+              className={`btn mode-toggle-btn ${isPlayerMode ? 'btn-secondary' : 'btn-emerald'}`}
               title="Switch between Banker and Player View"
               onClick={() => setAppMode(isPlayerMode ? 'banker' : 'player')}
             >
-              <span id="mode-icon">{isPlayerMode ? '👑' : '👤'}</span>
+              {isPlayerMode ? (
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              )}
               <span id="mode-text">{isPlayerMode ? 'Banker View' : 'Player View'}</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Active Game Controls */}
+      {/* Active Game Context Strip */}
       {game && (
-        <div className="game-header-controls" id="game-header-controls" style={{ display: 'flex' }}>
-          <div
-            className="header-pill game-info-pill"
+        <div className="game-header-controls" id="game-header-controls">
+          <button
+            type="button"
+            className="header-metric-item"
             id="btn-switch-game"
             title="Click to switch or view games"
             onClick={() => openModal('games-list')}
           >
-            <span className="pill-label">Game</span>
+            <span className="metric-label">Session</span>
             <strong id="hdr-game-name">{game.name}</strong>
-            <span className={`status-badge ${game.status}`} id="hdr-game-status">
-              {game.status.toUpperCase()}
+            <span className="metric-sep" aria-hidden="true">·</span>
+            <span className={`status-text ${game.status}`} id="hdr-game-status">
+              {game.status}
             </span>
-          </div>
+          </button>
 
-          <div
-            className="header-pill bank-drawer-pill"
+          <div className="header-divider" aria-hidden="true" />
+
+          <button
+            type="button"
+            className="header-metric-item"
             id="btn-bank-info"
             title="View Banker Drawer details"
             onClick={() => openModal('bank-info')}
           >
-            <span className="pill-label">Bank Drawer</span>
-            <strong id="hdr-bank-balance">{formatMoney(bankBal, curr)}</strong>
-            <div className="mini-health-bar">
+            <span className="metric-label">Bank Reserve</span>
+            <strong className="mono-num" id="hdr-bank-balance">{formatMoney(bankBal, curr)}</strong>
+            <div className="mini-health-bar" aria-hidden="true">
               <div
                 className="mini-health-fill"
                 id="hdr-bank-float-bar"
                 style={{ width: `${bankPercent}%` }}
               />
             </div>
-          </div>
+          </button>
 
-          <div className="header-pill round-pill" id="hdr-round-container">
-            <span className="pill-label">Round</span>
-            <strong id="hdr-round-no">{game.current_round}</strong>
+          <div className="header-divider" aria-hidden="true" />
+
+          <div className="header-metric-item static-metric" id="hdr-round-container">
+            <span className="metric-label">Round</span>
+            <strong className="mono-num" id="hdr-round-no">{game.current_round}</strong>
           </div>
         </div>
       )}
