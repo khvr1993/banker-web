@@ -541,7 +541,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setJoinRoomToken(room);
       setAppModeState('player');
       setActiveTransferTab('custom');
-      setConnectionState('connecting');
+      // Do not mark the session as connecting here: on a fresh device no
+      // join has been attempted yet. JoinSessionView enables the form and
+      // starts the attempt when the player submits it. Marking it connecting
+      // here disabled the name field and hung on "Connecting…" forever.
+      setConnectionState('idle');
       return;
     }
 

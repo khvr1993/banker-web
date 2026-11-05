@@ -54,7 +54,7 @@ export const JoinSessionView: React.FC = () => {
     await connect(room || joinRoomToken || '', cleanName);
   };
 
-  const busy = submitting || connectionState === 'connecting' || joinPending;
+  const busy = submitting || joinPending;
   const showRetry = !busy && (connectionState === 'error' || connectionState === 'reconnecting');
 
   let statusText = '';
@@ -62,7 +62,7 @@ export const JoinSessionView: React.FC = () => {
   if (joinPending) {
     statusText = 'Request sent — waiting for the banker to allow you in.';
     statusClass = 'pending';
-  } else if (connectionState === 'connecting' || submitting) {
+  } else if (submitting) {
     statusText = 'Connecting to the hosted table…';
     statusClass = 'pending';
   } else if (connectionState === 'reconnecting') {
