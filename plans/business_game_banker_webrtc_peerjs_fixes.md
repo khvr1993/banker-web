@@ -1734,4 +1734,210 @@ README says reloading the banker page resumes hosting with the same room code. P
 
 - README statements match observed behavior.
 - The host UI never looks frozen while PeerJS retries.
-<!-- PART-END -->
+---
+
+## 7. Regression matrix
+
+| # | Scenario | Expected | Automated test | Manual |
+|---|---|---|---|---|
+| 1 | Join → pending → approve → snapshot | One seat, one snapshot, live deltas | `session.test.ts` | Yes |
+| 2 | Connect but never join | No ledger data; hello timeout closes | `session.test.ts` | — |
+| 3 | Poison `round:` idempotency key | Salary still paid; player txn namespaced | `idempotency.test.ts`, `session.test.ts` | — |
+| 4 | Same key, different amount | 409 `IDEMPOTENT_CONFLICT`, no commit | `idempotency.test.ts` | — |
+| 5 | Double-click transfer | One transaction | `transferIntent.test.ts` | Yes |
+| 6 | Lost ack, same payload retry | Replay, one transaction | `idempotency.test.ts` | Yes |
+| 7 | Chunk `total` huge / invalid base64 | Rejected, bounded memory | `codec.test.ts` | — |
+| 8 | Dead signaling / silent host | Timeout error with Retry | `timeout.test.ts`, `session.test.ts` | Yes |
+| 9 | Lost `join-accepted`, pending game | Same seat, no duplicate | `session.test.ts` | Yes |
+| 10 | Lost `join-accepted`, active game | Same seat, no lockout | `session.test.ts` | Yes |
+| 11 | Double approve / two tabs same joinKey | One seat, old connection replaced | `session.test.ts` | Yes |
+| 12 | Kick then reconnect | Not auto-seated | `session.test.ts` | Yes |
+| 13 | Commit during accept snapshot | No rev gap, mirror matches host | `session.test.ts` | — |
+| 14 | Explicit stop hosting | Terminal error, no reconnect loop | `session.test.ts` | Yes |
+| 15 | Host page reload | `reconnecting`, then resync | `hostCredentials.test.ts` + manual | Yes |
+| 16 | Player presses Leave | Local mode; rejoin same seat | — | Yes |
+| 17 | Snapshot write fails | Join rejects visibly | `session.test.ts` | — |
+| 18 | Delta write fails once | Resync, data restored once | `session.test.ts` | — |
+| 19 | Host switches games | Old room stops with `game-switched` | — | Yes |
+| 20 | Two players, concurrent commands | Each gets the other’s event, not its own | `session.test.ts` (helper) | Yes |
+| 21 | Player transfer audit | `actor: player:<id>` | `service.test.ts`, `session.test.ts` | — |
+| 22 | Pending connection flood | Rejected/dropped, bounded | `session.test.ts` | — |
+| 23 | Host public URL / localhost | Warning + override link | `joinUrl.test.ts` | Yes |
+| 24 | 1000 token generations | Unique, crypto format | `random.test.ts` | — |
+| 25 | Host reload with real PeerJS | Room reacquired | — | Yes |
+
+---
+
+## 8. Verification commands
+
+Run after every phase, and once more before merging the protocol-v2 PR:
+
+```bash
+npm test
+npx tsc --noEmit
+npm run build
+git diff --check
+```
+
+Targeted runs while iterating:
+
+```bash
+npx tsx --test src/lib/net/session.test.ts
+npx tsx --test src/lib/net/codec.test.ts
+npx tsx --test src/lib/idempotency.test.ts
+npx tsx --test src/lib/transferIntent.test.ts
+npx tsx --test src/lib/net/hostCredentials.test.ts
+```
+
+Repo hygiene:
+
+```bash
+git status --short
+git diff --stat
+grep -rn "Math.random" src/lib/net src/components/TransferCard.tsx
+grep -rn "suppressEventsFor" src
+```
+
+Expected final state:
+
+- All tests pass, including the new regression tests.
+- `tsc` clean.
+- Production build clean.
+- No `suppressEventsFor`, no `Math.random` in credential paths, no player-supplied idempotency key reaches `localApi` unchanged.
+- Protocol version is 2 everywhere (`PROTOCOL_VERSION`, peer id prefix, README).
+
+---
+
+## 9. Manual real-PeerJS test matrix
+
+Run with two physical devices on different networks if possible. Use the deployed build or `npm run dev` opened via the host machine’s LAN IP (not `localhost`) on the host device.
+
+### Setup
+
+1. Host opens game A, clicks **Host Online Session**.
+2. Confirm the join URL is not a loopback URL; if it is, set the public base URL or reopen via LAN IP.
+3. Player opens the link, enters a name, waits for **Allow**.
+4. Banker approves; player sees the game and balances.
+
+### Scenarios
+
+1. **Happy path:** transfer, salary, void, bankruptcy, finish. Compare every balance on both devices against the host ledger.
+2. **Approval privacy:** before tapping Allow, confirm the player sees only “waiting for approval,” no players or transactions. (Best-effort UI check; the automated test is authoritative.)
+3. **Lost ack:** approve while the player is on a flaky connection / toggle airplane mode immediately after Allow. Reconnect. Confirm one seat, not two.
+4. **Active-game rejoin:** start the game, refresh the player page. Confirm automatic rejoin to the same seat.
+5. **Host reload:** start a round, refresh the host page. Confirm the player shows `Reconnecting…`, then resyncs to the same room and rev. Note how long room reclamation takes.
+6. **Explicit stop:** host presses Stop hosting. Confirm the player gets a terminal “banker ended the session” state and no endless retry.
+7. **Kick:** host kicks the player. Confirm terminal state; reconnect requires approval.
+8. **Leave:** player presses Leave. Confirm local mode; reopening the link rejoins the same seat.
+9. **Two players concurrently:** both send a payment at the same time. Confirm both transactions commit, balances match, and neither sender gets a duplicate self-toast.
+10. **Host switches games:** while hosting A, open game B. Confirm A’s room closes with a terminal message and B is local until hosting is started.
+11. **Network loss:** disable Wi-Fi for 10–15 s on the player. Confirm `Reconnecting…`, then delta/snapshot repair without duplicate money.
+12. **Private browsing:** host in a private window. Confirm approval works; reload behavior degrades per the credential-store fallback and shows a warning if persistence is unavailable.
+13. **Phone link:** verify the copied link opens on a phone (LAN IP or public URL).
+14. **Version skew:** keep an old tab open, deploy v2, reload only one side. Confirm the “different app versions” rejection is clear and no data is exchanged.
+
+Record the results and update README §Multiplayer / Troubleshooting based on observed behavior.
+
+---
+
+## 10. File change index
+
+### New files
+
+| File | Purpose |
+|---|---|
+| `src/lib/net/idempotency.ts` | Client key selection + host namespace |
+| `src/lib/net/joinKey.ts` | 128-bit join key generation/validation |
+| `src/lib/net/hostCredentials.ts` | IndexedDB + localStorage credential store |
+| `src/lib/net/joinUrl.ts` | Loopback detection + public base URL |
+| `src/lib/net/timeout.ts` | `withTimeout` primitive |
+| `src/lib/random.ts` | `crypto.getRandomValues` helpers |
+| `src/lib/transferIntent.ts` | Stable idempotency intent across manual retries |
+| `src/lib/idempotency.test.ts` | Replay/conflict/attack tests |
+| `src/lib/transferIntent.test.ts` | Fingerprint/key stability tests |
+| `src/lib/random.test.ts` | Random token tests |
+| `src/lib/net/hostCredentials.test.ts` | Credential store tests |
+| `src/lib/net/joinUrl.test.ts` | Join URL tests |
+| `src/lib/net/timeout.test.ts` | Timeout tests |
+
+### Modified files (main)
+
+| File | Fixes |
+|---|---|
+| `src/lib/net/protocol.ts` | v2, welcome shape, joinKey, host-bye code, remove dead exports |
+| `src/lib/net/hostSession.ts` | P0-1, P0-2, P0-3, P0-6, P1-1, P1-6, P1-7, P1-8, P1-10, P2-3 |
+| `src/lib/net/clientSession.ts` | P0-2, P0-5, P0-6, P1-1, P1-3, P1-7, P1-9 |
+| `src/lib/net/codec.ts` | P0-3 |
+| `src/lib/net/peerTransport.ts` | P0-5 |
+| `src/lib/net/transportTypes.ts` | P0-5 options |
+| `src/lib/net/authz.ts` | P2-3 dead export |
+| `src/lib/ledger.ts` | P0-1 conflict detection |
+| `src/lib/domain.ts` | P0-1 error status |
+| `src/lib/api.ts` | P1-8 actor plumbing |
+| `src/lib/service.ts` | P1-8 audit actor |
+| `src/lib/gameApi.ts` | P2-3, optionally action guard |
+| `src/lib/remoteDb.ts` | P2-3 |
+| `src/lib/db.ts` | P2-3 dead exports |
+| `src/lib/constants.ts` | P2-4 idempotency key randomness |
+| `src/context/GameContext.tsx` | P1-1, P1-2, P1-4, P1-9, P2-1 |
+| `src/components/TransferCard.tsx` | P0-4 |
+| `src/components/Header.tsx` | P1-2 |
+| `src/components/HostSessionPanel.tsx` | P2-1 warning/public URL |
+| `src/components/JoinSessionView.tsx` | P0-5 retry/terminal messaging |
+| `src/lib/net/session.test.ts` | Regression matrix |
+| `src/lib/net/codec.test.ts` | Chunk limits |
+| `src/lib/service.test.ts` | Audit actor |
+| `README.md` | Protocol v2, troubleshooting, verified reload behavior |
+
+---
+
+## 11. Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Protocol v2 strands a stale tab | Player cannot join | Clear “different app versions” message; README “reload both devices”; deploy atomically |
+| Snapshot exceeds 4 MB | Large game cannot sync | Pre-check size; clear “history too large” rejection; consider raising `MAX_ASSEMBLER_BYTES` or snapshot pagination as a follow-up |
+| `joinKey` is a bearer credential | Seat hijack if the key leaks | 128-bit random, never in URL/QR, only over the encrypted data channel; kick deletes the reservation |
+| Host credential store fails in private browsing | Rejoin needs approval | localStorage fallback + explicit warning; never corrupts seats |
+| Buffered join deltas grow during a slow snapshot | Memory/UI delay | Snapshot is a single read; buffer is bounded by commits during that window; add a cap if observed |
+| Event-origin map cleanup races | Wrong toast suppression | Commit listener runs before `localApi` resolves; delete in `finally`; unit-test the pure helper |
+| `stop()` flush delay | Bye not delivered | 150 ms `closeSoon` pattern; test with the fake transport; never close synchronously after send |
+| GameContext async races | Old session resurrects | `hostEpochRef` + `currentGameIdRef` checks after every await |
+| PeerJS Cloud outage | Online mode unavailable | Timeouts, retry, clear error; local mode remains fully functional |
+| More tests slow the suite | Developer friction | Keep tests in-memory; fake-indexeddb; no network I/O |
+
+Rollback:
+
+- Phase 1/2/4/5 are independently revertible.
+- Phase 3 (protocol v2) must be reverted as a whole. If a rollback is needed, redeploy the previous build to all devices; old clients will reconnect to the old host.
+- Keep `plans/business_game_banker_webrtc_peerjs_fixes.md` updated if implementation deviates.
+
+---
+
+## 12. Deferred / known limitations
+
+These are out of scope for this fix plan but should be tracked:
+
+1. **Mirror DB is shared per browser, not per room.** Two tabs joining different rooms can clobber each other. Scope the mirror name by room (`banker_mirror_<room>`) later.
+2. **Client credentials still live in localStorage.** P1-5 fixes the host side; a player who clears storage or uses private browsing still needs re-approval and can be locked out of an active game. A banker-side “rebind this seat” action would solve this.
+3. **No explicit snapshot pagination.** The 4 MB cap is a hard limit; huge game histories will be rejected rather than streamed.
+4. **No TURN server configured by default.** `banker_ice_servers` can be set manually, but symmetric NATs may fail. Document it in troubleshooting.
+5. **No offline queue for player commands.** Commands submitted while disconnected are rejected; the UI disables the form. A durable outbox could be added later.
+6. **No mesh/local-first fallback.** The architecture remains host-authoritative by design.
+
+---
+
+## 13. Recommended first implementation slice
+
+If implementation starts now, do this order:
+
+1. **P0-1** (idempotency namespace + conflict) with the poison test.
+2. **P0-4** (submit lock + stable intent) with the pure helper test.
+3. **P0-3** (chunk caps) with the fuzz tests.
+4. **P0-5** (timeouts) with the join-timeout test.
+5. Stop and run the full suite + build.
+6. Then start the **protocol v2** set (`P0-2` → `P0-6` → `P1-7` → `P1-1`) as one PR.
+7. Then the remaining P1s, then P2 polish.
+
+This ordering fixes every money-affecting issue before touching the wire format, and keeps the risky protocol change isolated in a single reviewable unit.
+
