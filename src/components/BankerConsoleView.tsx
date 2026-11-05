@@ -15,9 +15,11 @@ export const BankerConsoleView: React.FC = () => {
     openModal,
     showToast,
     refreshActiveGame,
+    sessionRole,
+    remotePeers,
   } = useGame();
 
-  const [activeTab, setActiveTab] = useState<'console' | 'ledger'>('console');
+  const [activeTab, setActiveTab] = useState<'console' | 'ledger' | 'session'>('console');
 
   // Ledger filters
   const [filterRound, setFilterRound] = useState<string>('');
@@ -53,6 +55,9 @@ export const BankerConsoleView: React.FC = () => {
 
   const curr = game.currency || '₹';
   const activeCount = players.filter((p) => !p.is_bankrupt).length;
+  const pendingJoins = remotePeers.filter((p) => p.status === 'pending').length;
+  const connectedDevices = remotePeers.filter((p) => p.status === 'connected').length;
+  const hostedBadge = sessionRole !== 'host' ? null : pendingJoins > 0 ? pendingJoins : connectedDevices;
 
   const handleFinishGame = async () => {
     if (!window.confirm('Are you sure you want to finish this game? The ledger will become read-only.')) return;
@@ -119,13 +124,33 @@ export const BankerConsoleView: React.FC = () => {
             {transactions.length}
           </span>
         </button>
+
+        <button
+          className={`view-tab-btn ${activeTab === 'session' ? 'active' : ''}`}
+          id="tab-btn-session"
+          onClick={() => setActiveTab('session')}
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg>
+          <span>Hosted Session</span>
+          {hostedBadge !== null && (
+            <span
+              className={`tab-count mono-num ${pendingJoins > 0 ? 'alert' : ''}`}
+              id="tab-session-count"
+            >
+              {hostedBadge}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Subview 1: Banker Console */}
       {activeTab === 'console' && (
         <div id="subview-console" className="subview-content">
-          <HostSessionPanel />
-
           {/* Game Status Banner if Finished */}
           {game.status === 'finished' && (
             <div id="finished-banner" className="finished-banner">
@@ -357,6 +382,13 @@ export const BankerConsoleView: React.FC = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Subview 3: Hosted Session */}
+      {activeTab === 'session' && (
+        <div id="subview-session" className="subview-content">
+          <HostSessionPanel />
         </div>
       )}
     </section>
