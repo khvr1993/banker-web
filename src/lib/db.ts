@@ -19,11 +19,32 @@ export function configureStorage(config: { dbName: string }): void {
   activeDbName = config.dbName || DB_NAME;
 }
 
+const OPEN_TIMEOUT_MS = 15_000;
+
 export function openDb(name: string = activeDbName): Promise<IDBDatabase> {
   const cached = dbPromises.get(name);
   if (cached) return cached;
+  let settled = false;
   const promise = new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open(name, DB_VERSION);
+    let req: IDBOpenDBRequest;
+    try {
+      req = indexedDB.open(name, DB_VERSION);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error('IndexedDB is unavailable'));
+      return;
+    }
+    // A blocked upgrade or an unavailable private-mode database can leave
+    // `open` pending indefinitely; fail visibly instead of hanging the app.
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(new Error('Opening local storage timed out. Close other app tabs and retry.'));
+    }, OPEN_TIMEOUT_MS);
+    const finish = () => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      return true;
+    };
     req.onupgradeneeded = () => {
       const db = req.result;
       db.createObjectStore('games', { keyPath: 'id' });
@@ -37,13 +58,29 @@ export function openDb(name: string = activeDbName): Promise<IDBDatabase> {
       audit.createIndex('by_game', 'game_id', { unique: false });
     };
     req.onsuccess = () => {
+      if (!finish()) {
+        // The open completed after we gave up; do not leak the connection.
+        try {
+          req.result.close();
+        } catch {
+          // ignore
+        }
+        return;
+      }
       req.result.onversionchange = () => {
         req.result.close();
         dbPromises.delete(name);
       };
       resolve(req.result);
     };
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      if (finish()) reject(req.error || new Error('Could not open local storage'));
+    };
+    req.onblocked = () => {
+      if (finish()) {
+        reject(new Error('Local storage is blocked by another tab. Close other app tabs and retry.'));
+      }
+    };
   });
   promise.catch(() => dbPromises.delete(name));
   dbPromises.set(name, promise);

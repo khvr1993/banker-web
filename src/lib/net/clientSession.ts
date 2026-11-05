@@ -6,6 +6,7 @@ import { ChunkAssembler, sendMessage } from './codec';
 import { createTransport } from './peerFactory';
 import { Transport, TransportConnection } from './transportTypes';
 import { newJoinKey, sanitizeJoinKey } from './joinKey';
+import { withTimeout } from './timeout';
 import {
   ClientMessage,
   CmdMessage,
@@ -44,12 +45,17 @@ export interface JoinedInfo {
 export interface ClientSessionOptions {
   handshakeTimeoutMs?: number;
   pendingAckTimeoutMs?: number;
+  snapshotTimeoutMs?: number;
 }
 
 const COMMAND_TIMEOUT_MS = 7000;
 const MAX_COMMAND_ATTEMPTS = 3;
 const HEARTBEAT_MS = 15000;
 const HEARTBEAT_TIMEOUT_MS = 45000;
+// IndexedDB writes are normally instant. A private window or a blocked
+// database can leave the transaction pending forever, which used to strand the
+// join screen on "Connecting…" because the handshake timers were already clear.
+const SNAPSHOT_TIMEOUT_MS = 20_000;
 
 const TERMINAL_BYE_CODES = new Set<HostByeCode>([
   'host-stopped',
@@ -370,7 +376,7 @@ export class ClientSession {
           break;
         case 'snapshot':
           this.rev = msg.rev;
-          await this.handlers.onSnapshot(msg.data, this.gameId || '');
+          await this.applySnapshot(msg.data, this.gameId || '');
           break;
         case 'delta':
           await this.handleDelta(msg);
@@ -406,6 +412,24 @@ export class ClientSession {
     }
   }
 
+  /**
+   * Runs the local mirror write behind a deadline. Without this a blocked
+   * IndexedDB transaction in a private window leaves `join()` pending forever.
+   */
+  private async applySnapshot(snapshot: Dump, gameId: string): Promise<void> {
+    const timeoutMs = this.options.snapshotTimeoutMs ?? SNAPSHOT_TIMEOUT_MS;
+    await withTimeout(
+      Promise.resolve(this.handlers.onSnapshot(snapshot, gameId)),
+      timeoutMs,
+      () =>
+        new RemoteCommandError(
+          504,
+          'STORAGE_TIMEOUT',
+          'Could not save the game on this device. Private browsing or full storage can block it. Try a normal window or free up space.'
+        )
+    );
+  }
+
   private async handleAccepted(
     msg: Extract<HostMessage, { t: 'join-accepted' }>
   ): Promise<void> {
@@ -417,11 +441,15 @@ export class ClientSession {
     this.rev = msg.rev;
 
     try {
-      await this.handlers.onSnapshot(msg.snapshot, msg.gameId);
+      await this.applySnapshot(msg.snapshot, msg.gameId);
     } catch (err) {
-      this.handlers.onError(
-        'Could not load the game into local storage. Free up space and retry.'
-      );
+      // Keep the specific storage-timeout guidance, but fall back to the
+      // generic message for ordinary write failures such as quota errors.
+      const message =
+        err instanceof RemoteCommandError && err.type === 'STORAGE_TIMEOUT'
+          ? err.message
+          : 'Could not load the game into local storage. Free up space and retry.';
+      this.handlers.onError(message);
       throw err;
     }
 

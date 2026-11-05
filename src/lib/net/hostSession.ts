@@ -53,6 +53,8 @@ export interface RemotePeerInfo {
   playerId: string | null;
   status: 'pending' | 'connected';
   connected: boolean;
+  /** A device asking to reclaim an existing seat after the game started. */
+  reclaiming?: boolean;
 }
 
 export interface HostSessionHooks {
@@ -79,6 +81,8 @@ interface PeerRecord {
   name: string;
   playerId: string | null;
   joinKey: string;
+  /** Existing seat this pending device may reclaim (lost local credentials). */
+  reclaimPlayerId: string | null;
   accepted: boolean;
   accepting: boolean;
   joining: boolean;
@@ -175,6 +179,30 @@ function newPlayerToken(): string {
   return randomId('pt', 16);
 }
 
+function normalizedName(name: string): string {
+  return String(name || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+/**
+ * Finds the one existing seat a device may reclaim by its display name.
+ * Used after the game starts, when a device lost its local joinKey (for
+ * example a private window was closed) but the banker wants to re-admit it.
+ */
+export function findReclaimablePlayer<T extends { id: string; name: string }>(
+  players: T[],
+  name: string,
+  preferredId?: string | null
+): T | null {
+  const target = normalizedName(name);
+  if (!target) return null;
+  const matches = players.filter((p) => normalizedName(p.name) === target);
+  if (preferredId) {
+    const preferred = matches.find((p) => p.id === preferredId);
+    if (preferred) return preferred;
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export class HostSession {
   readonly room: string;
   readonly gameId: string;
@@ -236,6 +264,7 @@ export class HostSession {
         playerId: r.playerId,
         status: r.accepted ? 'connected' : 'pending',
         connected: r.accepted,
+        reclaiming: !r.accepted && Boolean(r.reclaimPlayerId),
       });
     }
     return out;
@@ -261,6 +290,52 @@ export class HostSession {
       const existing = this.reservations.get(joinKey);
       if (existing?.status === 'seated' && existing.playerId) {
         await this.accept(record, existing.playerId, existing.playerToken);
+        return;
+      }
+
+      const bundle = await loadGame(this.gameId);
+      if (!bundle.game) {
+        this.reject(record, 'Game not found on the host');
+        return;
+      }
+
+      // After the game starts no new seats can be created. The banker may
+      // still explicitly re-admit an existing seat when a device lost its
+      // local join key (private window, cleared storage, new browser).
+      if (bundle.game.status !== 'pending') {
+        const player = findReclaimablePlayer(
+          bundle.players,
+          record.name,
+          record.reclaimPlayerId
+        );
+        if (!player) {
+          this.reject(
+            record,
+            'This game has already started and that seat no longer exists. Ask the banker to check your name.'
+          );
+          return;
+        }
+        const token = newPlayerToken();
+        this.tokens.set(player.id, token);
+        // Rebind the durable seat to this device. The old key is revoked so a
+        // stale copy of the credentials cannot keep claiming the same seat.
+        for (const [key, res] of [...this.reservations.entries()]) {
+          if (res.playerId === player.id && key !== joinKey) {
+            this.reservations.delete(key);
+            this.notifiedJoinKeys.delete(key);
+          }
+        }
+        this.reservations.set(joinKey, {
+          joinKey,
+          playerId: player.id,
+          playerToken: token,
+          name: player.name,
+          gameId: this.gameId,
+          status: 'seated',
+          createdAt: Date.now(),
+        });
+        await this.saveCredentials();
+        await this.accept(record, player.id, token);
         return;
       }
 
@@ -473,6 +548,7 @@ export class HostSession {
       name: '',
       playerId: null,
       joinKey: '',
+      reclaimPlayerId: null,
       accepted: false,
       accepting: false,
       joining: false,
@@ -533,6 +609,15 @@ export class HostSession {
     this.closeSoon(record);
   }
 
+  /**
+   * A storage failure on the host must not leave a pending peer waiting for a
+   * reply or surface as an unhandled rejection. Send a visible rejection.
+   */
+  private failPeer(record: PeerRecord, err: unknown): void {
+    this.options.onLog?.(`Peer handshake failed: ${String(err)}`);
+    this.reject(record, 'The banker device could not load the game. Retry in a moment.');
+  }
+
   private closeSoon(record: PeerRecord): void {
     setTimeout(() => record.conn.close(), 150);
   }
@@ -568,10 +653,10 @@ export class HostSession {
     }
     switch (msg.t) {
       case 'hello':
-        void this.handleHello(record, msg);
+        void this.handleHello(record, msg).catch((err) => this.failPeer(record, err));
         break;
       case 'join-request':
-        void this.handleJoinRequest(record, msg);
+        void this.handleJoinRequest(record, msg).catch((err) => this.failPeer(record, err));
         break;
       case 'cmd':
         void this.handleCommand(record, msg);
@@ -678,12 +763,29 @@ export class HostSession {
       return;
     }
     if (bundle.game.status !== 'pending') {
-      this.reject(record, 'This game has already started. Only existing seats can reconnect.');
-      return;
-    }
-    if (!seated && bundle.players.length >= MAX_SEATS) {
-      this.reject(record, 'This table is full');
-      return;
+      // A cleared/private-window device has no local joinKey, so it cannot be
+      // verified automatically. Surface the request to the banker instead of
+      // rejecting outright; they can explicitly re-admit a matching seat.
+      const player = findReclaimablePlayer(bundle.players, name);
+      if (!player) {
+        const ambiguous = bundle.players.some(
+          (p) => normalizedName(p.name) === normalizedName(name)
+        );
+        this.reject(
+          record,
+          ambiguous
+            ? 'More than one seat uses that name. Ask the banker to reconnect you.'
+            : 'This game has already started. Only existing seats can reconnect.'
+        );
+        return;
+      }
+      record.reclaimPlayerId = player.id;
+    } else {
+      record.reclaimPlayerId = null;
+      if (!seated && bundle.players.length >= MAX_SEATS) {
+        this.reject(record, 'This table is full');
+        return;
+      }
     }
 
     this.reservations.set(joinKey, {
@@ -803,6 +905,11 @@ export class HostSession {
       for (const message of buffered) this.send(record, message);
       completed = true;
       this.emitPeers();
+    } catch (err) {
+      // Local storage can now time out instead of hanging; tell the client
+      // rather than letting the rejection escape from a voided async call.
+      this.options.onLog?.(`Could not accept peer: ${String(err)}`);
+      this.reject(record, 'The banker device could not load the game. Retry in a moment.');
     } finally {
       if (!completed) {
         record.joining = false;

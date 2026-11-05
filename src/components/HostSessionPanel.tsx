@@ -169,7 +169,9 @@ export const HostSessionPanel: React.FC = () => {
                 <div key={peer.sessionId} className="host-peer-row pending">
                   <div>
                     <strong>{peer.name}</strong>
-                    <div className="text-xs text-muted">Waiting for approval</div>
+                    <div className="text-xs text-muted">
+                      {peer.reclaiming ? 'Reconnecting to an existing seat' : 'Waiting for approval'}
+                    </div>
                   </div>
                   <div className="host-peer-actions">
                     <button className="btn btn-primary btn-xs" onClick={() => approveJoin(peer.sessionId)}>

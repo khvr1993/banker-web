@@ -1375,6 +1375,150 @@ test('host reload restores seated players from the credential store without appr
   }
 });
 
+test('a device that lost its join key can be re-admitted after the game starts', async () => {
+  const stamp = unique('active-reclaim');
+  const room = stamp;
+  const gameId = await createTestGame(stamp);
+  let host: HostSession | null = null;
+  let first: ClientSession | null = null;
+  let returning: ClientSession | null = null;
+  setCommitListener((j) => host?.broadcastJournal(j));
+  installHub();
+  const firstBucket = makeBucket();
+  const returnBucket = makeBucket();
+
+  try {
+    host = await HostSession.start({ room, gameId });
+    first = await ClientSession.create(room, makeHandlers(firstBucket));
+    const join = first.join('Alice');
+    join.catch(() => {});
+    const pending = await waitFor(() => host?.peers.find((p) => p.status === 'pending'), 'pending');
+    await host.approve(pending.sessionId);
+    const info = await join;
+
+    await localApi(`/games/${gameId}/start`, { method: 'POST' });
+    first.leave();
+    first = null;
+    await waitFor(() => host?.acceptedPeerCount === 0, 'the first connection to drop');
+
+    // Simulate a private window being closed or cleared storage: the durable
+    // join key is gone, so the host cannot verify this device automatically.
+    localStorage.removeItem(`banker_session_${room}`);
+    returning = await ClientSession.create(room, makeHandlers(returnBucket));
+    const retryJoin = returning.join('Alice');
+    retryJoin.catch(() => {});
+
+    const reclaim = await waitFor(
+      () => host?.peers.find((p) => p.status === 'pending' && p.name === 'Alice'),
+      'the reclaim request'
+    );
+    assert.equal(reclaim.reclaiming, true);
+    assert.ok(returnBucket.pending > 0);
+    assert.equal(returnBucket.rejected.length, 0);
+
+    await host.approve(reclaim.sessionId);
+    const reclaimed = await retryJoin;
+    assert.equal(reclaimed.playerId, info.playerId);
+    assert.equal(returning.isAccepted, true);
+    assert.equal(host.acceptedPeerCount, 1);
+    assert.equal((await loadGame(gameId)).players.length, 1);
+
+    // The rebound reservation must survive the next drop.
+    returning.leave();
+    returning = null;
+    await waitFor(() => host?.acceptedPeerCount === 0, 'the reclaimed connection to drop');
+    const again = await ClientSession.create(room, makeHandlers(makeBucket()));
+    returning = again;
+    assert.equal((await again.join('Alice')).playerId, info.playerId);
+  } finally {
+    setCommitListener(null);
+    returning?.leave();
+    first?.leave();
+    host?.stop({ notify: false });
+    resetPeerFactory();
+  }
+});
+
+test('an unknown device is still rejected after the game starts', async () => {
+  const stamp = unique('active-stranger');
+  const room = stamp;
+  const gameId = await createTestGame(stamp);
+  let host: HostSession | null = null;
+  let first: ClientSession | null = null;
+  let stranger: ClientSession | null = null;
+  setCommitListener((j) => host?.broadcastJournal(j));
+  installHub();
+  const bucket = makeBucket();
+
+  try {
+    host = await HostSession.start({ room, gameId, credentialStore: new MemoryCredentialStore() });
+    first = await ClientSession.create(room, makeHandlers(makeBucket()));
+    const join = first.join('Alice');
+    join.catch(() => {});
+    const pending = await waitFor(() => host?.peers.find((p) => p.status === 'pending'), 'pending');
+    await host.approve(pending.sessionId);
+    await join;
+
+    await localApi(`/games/${gameId}/start`, { method: 'POST' });
+    first.leave();
+    first = null;
+    await waitFor(() => host?.acceptedPeerCount === 0, 'the first connection to drop');
+
+    localStorage.removeItem(`banker_session_${room}`);
+    stranger = await ClientSession.create(room, makeHandlers(bucket));
+    const strangerJoin = stranger.join('Mallory');
+    strangerJoin.catch(() => {});
+    await waitFor(
+      () => bucket.rejected.some((r) => /already started/i.test(r)),
+      'the active-game rejection'
+    );
+    assert.equal(stranger.isAccepted, false);
+    assert.equal((await loadGame(gameId)).players.length, 1);
+  } finally {
+    setCommitListener(null);
+    stranger?.leave();
+    first?.leave();
+    host?.stop({ notify: false });
+    resetPeerFactory();
+  }
+});
+
+test('a stalled local mirror write times out instead of hanging the join screen', async () => {
+  const stamp = unique('snapshot-timeout');
+  const room = stamp;
+  const gameId = await createTestGame(stamp);
+  let host: HostSession | null = null;
+  let client: ClientSession | null = null;
+  installHub();
+  const bucket = makeBucket();
+
+  try {
+    host = await HostSession.start({ room, gameId });
+    client = await ClientSession.create(
+      room,
+      makeHandlers(bucket, {
+        onSnapshot: () => new Promise<void>(() => {}),
+      }),
+      { snapshotTimeoutMs: 60 }
+    );
+    const join = client.join('Alice');
+    const pending = await waitFor(() => host?.peers.find((p) => p.status === 'pending'), 'pending');
+    await host.approve(pending.sessionId);
+
+    await assert.rejects(join, (err: any) => {
+      assert.equal(err.type, 'STORAGE_TIMEOUT');
+      assert.match(err.message, /private browsing|storage/i);
+      return true;
+    });
+    assert.equal(client.isAccepted, false);
+    assert.equal(bucket.statuses.at(-1), 'error');
+  } finally {
+    client?.leave();
+    host?.stop({ notify: false });
+    resetPeerFactory();
+  }
+});
+
 test('a dropped pending request is pruned and notifies the banker again', async () => {
   const stamp = unique('pending-prune');
   const room = stamp;

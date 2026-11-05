@@ -42,6 +42,9 @@ Notes and caveats:
   join acknowledgment or a reload recovers the seat without banker approval.
 - A banker can **Kick** a device. Kicking revokes its key, so the player must be approved again.
 - Only reconnecting an existing seat is supported after the game starts. Seat players before starting.
+  If a device loses its key (for example a closed private window or cleared browser storage), the
+  player re-enters the **same display name** and the request appears in Hosted Session; the banker
+  can **Allow** it to re-admit that existing seat without creating a new player.
 - Players can use **Leave** in the header to leave the session without signing out of the device.
 - Players only see the hosted game's mirror (`banker_mirror_db`), never the banker's full ledger.
   Backup/restore and CSV export are banker-only UI actions (a UI guard; the mirror is
@@ -61,7 +64,11 @@ loopback. Joining by room code always works without any configuration.
 
 - **Stuck on “Connecting…”** — signaling is unreachable, the room code is wrong, or guest Wi-Fi
   blocks WebRTC. The join times out after 15 seconds with a visible error; check the internet
-  connection and the room code.
+  connection and the room code. If the join was already approved, a blocked local database also
+  times out with a storage error after 20 seconds; private browsing may block IndexedDB, so open a
+  normal window or free up space.
+- **Rejoining from a private window** — Safari private windows discard `localStorage` when they
+  close, so the seat key is gone. Enter the same name and ask the banker to **Allow** the reconnect.
 - **“Different app versions”** — one tab is stale. Reload both the banker and the player tab.
 - **A join link works on the banker but not on a phone** — the link points at loopback. Use the
   LAN IP or a public base URL.
@@ -69,8 +76,9 @@ loopback. Joining by room code always works without any configuration.
   it awake and reload it; the host resumes the room and players resync.
 - **The host card is stuck on “Starting… / Reclaiming room…”** — PeerJS may still hold the old
   peer id briefly after a reload. Wait a few seconds; if it persists, stop and reopen hosting.
-- **“This game has already started”** — new seats cannot join an active game. Only reserved
-  players can reconnect; seat everyone before starting.
+- **“This game has already started”** — a brand-new name cannot join an active game. If you were
+  seated before, use the same display name; the banker can Allow the reconnect request. Otherwise
+  create a new game and seat everyone before starting.
 
 ## Development
 
