@@ -10,6 +10,7 @@ export const JoinSessionView: React.FC = () => {
     connectionState,
     sessionError,
     joinPending,
+    sessionKicked,
     leaveSession,
     showToast,
   } = useGame();
@@ -65,6 +66,10 @@ export const JoinSessionView: React.FC = () => {
   } else if (submitting) {
     statusText = 'Connecting to the hosted table…';
     statusClass = 'pending';
+  } else if (sessionKicked) {
+    statusText =
+      'The banker removed this device. Ask to rejoin and they can allow you back into your seat.';
+    statusClass = 'error';
   } else if (connectionState === 'reconnecting') {
     statusText = 'Connection lost — retrying automatically…';
     statusClass = 'warning';
@@ -139,7 +144,7 @@ export const JoinSessionView: React.FC = () => {
                 disabled={submitting}
                 onClick={() => connect(room || joinRoomToken || '', name)}
               >
-                Retry Connection
+                {sessionKicked ? 'Ask to Rejoin' : 'Retry Connection'}
               </button>
             )}
           </div>

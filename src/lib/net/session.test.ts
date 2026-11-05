@@ -755,11 +755,83 @@ test('kick revokes the seat and forces a fresh join request', async () => {
     retry = await ClientSession.create(room, makeHandlers(retryBucket));
     const retryJoin = retry.join('Alice');
     retryJoin.catch(() => {});
-    await waitFor(() => host?.peers.some((p) => p.status === 'pending'), 'the retry pending request');
+    const retryPending = await waitFor(
+      () => host?.peers.find((p) => p.status === 'pending' && p.kicked),
+      'the retry pending request'
+    );
     assert.equal(retry.isAccepted, false);
     assert.equal(retryBucket.joined.length, 0);
+    assert.ok(retryBucket.pending > 0);
+
+    // Approving a kicked rejoin must restore the same ledger seat instead of
+    // seating a duplicate row with the same name.
+    const beforeApprove = await loadGame(gameId);
+    assert.equal(beforeApprove.players.length, 1);
+    await host.approve(retryPending.sessionId);
+    const retryInfo = await retryJoin;
+    assert.equal(retryInfo.playerId, beforeApprove.players[0].id);
     assert.equal((await loadGame(gameId)).players.length, 1);
     retry.leave();
+  } finally {
+    setCommitListener(null);
+    retry?.leave();
+    client?.leave();
+    host?.stop({ notify: false });
+    resetPeerFactory();
+  }
+});
+
+test('a kicked player can rejoin an active game after the banker allows it', async () => {
+  const stamp = unique('kick-rejoin');
+  const room = stamp;
+  const gameId = await createTestGame(stamp);
+  let host: HostSession | null = null;
+  let client: ClientSession | null = null;
+  let retry: ClientSession | null = null;
+  setCommitListener((j) => host?.broadcastJournal(j));
+  installHub();
+  const bucket = makeBucket();
+  const retryBucket = makeBucket();
+
+  try {
+    host = await HostSession.start({ room, gameId });
+    client = await ClientSession.create(room, makeHandlers(bucket));
+    const joinPromise = client.join('Alice');
+    joinPromise.catch(() => {});
+    const pending = await waitFor(() => host?.peers.find((p) => p.status === 'pending'), 'pending');
+    await host.approve(pending.sessionId);
+    const info = await joinPromise;
+
+    await localApi(`/games/${gameId}/start`, { method: 'POST' });
+
+    const connected = host.peers.find((p) => p.playerId === info.playerId);
+    assert.ok(connected);
+    host.kick(connected!.sessionId);
+    await waitFor(() => bucket.rejected.length > 0, 'the removed bye');
+    client = null;
+
+    // The kicked device asks again. After the game started the host used to
+    // answer "already started"; instead the request must reach the banker with
+    // an allow/deny choice.
+    retry = await ClientSession.create(room, makeHandlers(retryBucket));
+    const retryJoin = retry.join('Alice');
+    retryJoin.catch(() => {});
+
+    const rejoin = await waitFor(
+      () => host?.peers.find((p) => p.status === 'pending' && p.kicked),
+      'the kicked rejoin request'
+    );
+    assert.equal(rejoin.reclaiming, true);
+    assert.equal(retryBucket.rejected.length, 0);
+    assert.ok(retryBucket.pending > 0);
+    assert.equal(retry.isAccepted, false);
+
+    await host.approve(rejoin.sessionId);
+    const reclaimed = await retryJoin;
+    assert.equal(reclaimed.playerId, info.playerId);
+    assert.equal(retry.isAccepted, true);
+    await waitFor(() => host?.acceptedPeerCount === 1, 'the restored seat');
+    assert.equal((await loadGame(gameId)).players.length, 1);
   } finally {
     setCommitListener(null);
     retry?.leave();

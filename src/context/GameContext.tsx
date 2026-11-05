@@ -55,6 +55,7 @@ interface GameContextType {
   sessionError: string | null;
   sessionReady: boolean;
   joinPending: boolean;
+  sessionKicked: boolean;
   latencyMs: number;
   startHosting: () => Promise<void>;
   stopHosting: () => void;
@@ -89,6 +90,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [joinPending, setJoinPending] = useState(false);
+  const [sessionKicked, setSessionKicked] = useState(false);
   const [latencyMs, setLatencyMs] = useState(0);
 
   const hostRef = useRef<HostSession | null>(null);
@@ -320,7 +322,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         gameId,
         publicBaseUrl,
         onPeersChanged: (peers) => setRemotePeers(peers),
-        onJoinRequest: (peer) => showToast(`${peer.name} wants to join`, 'info', 6000),
+        onJoinRequest: (peer) =>
+          showToast(
+            peer.kicked
+              ? `${peer.name} was removed and wants to rejoin`
+              : `${peer.name} wants to join`,
+            'info',
+            6000
+          ),
         onError: (msg) => showToast(msg, 'error'),
         onLog: (msg) => console.info('[host]', msg),
       });
@@ -397,6 +406,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSessionReady(false);
       setSessionError(null);
       setJoinPending(false);
+      setSessionKicked(false);
       setConnectionState('connecting');
       setJoinRoomToken(cleanRoom);
       try {
@@ -408,6 +418,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       let session: ClientSession | null = null;
+      // A kick fires onKicked, then onRejected/onError from failJoin. Keep the
+      // friendlier "removed" copy instead of letting later callbacks overwrite it.
+      let wasKicked = false;
       try {
         session = await ClientSession.create(cleanRoom, {
           onSnapshot: async (snapshot, gameId) => {
@@ -433,9 +446,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           },
           onLatency: (ms) => setLatencyMs(ms),
           onJoined: (info) => {
+            wasKicked = false;
             setMyPlayerIdState(info.playerId);
             setSessionReady(true);
             setJoinPending(false);
+            setSessionKicked(false);
             setSessionError(null);
             setHostOnline(true);
             setLatencyMs(session?.latencyMs ?? 0);
@@ -444,7 +459,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setJoinPending(true);
             setConnectionState('connecting');
           },
+          onKicked: () => {
+            wasKicked = true;
+            setJoinPending(false);
+            setSessionKicked(true);
+            setSessionError(
+              'The banker removed this device from the table. Ask to rejoin and they can let you back in.'
+            );
+            setConnectionState('error');
+            setSessionReady(false);
+          },
           onRejected: (reason) => {
+            if (wasKicked) return;
             setJoinPending(false);
             setSessionError(reason);
             setConnectionState('error');
@@ -462,7 +488,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
               showToast(event.description, 'success', 2500);
             }
           },
-          onError: (message) => setSessionError(message),
+          onError: (message) => {
+            if (!wasKicked) setSessionError(message);
+          },
         });
         clientRef.current = session;
         setClientSession(session);
@@ -492,6 +520,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Keep the stored joinKey: leaving does not revoke the seat.
     setSessionReady(false);
     setJoinPending(false);
+    setSessionKicked(false);
     setConnectionState('idle');
     setSessionError(null);
     window.location.assign(window.location.pathname);
@@ -620,6 +649,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         sessionError,
         sessionReady,
         joinPending,
+        sessionKicked,
         latencyMs,
         startHosting,
         stopHosting,

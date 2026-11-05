@@ -55,6 +55,8 @@ export interface RemotePeerInfo {
   connected: boolean;
   /** A device asking to reclaim an existing seat after the game started. */
   reclaiming?: boolean;
+  /** A device the banker kicked earlier, now asking to be let back in. */
+  kicked?: boolean;
 }
 
 export interface HostSessionHooks {
@@ -83,6 +85,8 @@ interface PeerRecord {
   joinKey: string;
   /** Existing seat this pending device may reclaim (lost local credentials). */
   reclaimPlayerId: string | null;
+  /** This pending device was kicked and must be explicitly re-approved. */
+  kickedRejoin: boolean;
   accepted: boolean;
   accepting: boolean;
   joining: boolean;
@@ -215,6 +219,9 @@ export class HostSession {
   private credentialStore: HostCredentialStore;
   private approvingJoinKeys = new Set<string>();
   private notifiedJoinKeys = new Set<string>();
+  /** playerId -> display name for seats the banker kicked. Their rejoin must
+   * always go through an explicit allow/deny, even after the game started. */
+  private kickedSeats = new Map<string, string>();
   private commandOrigins = new Map<string, string>();
   private rev = 0;
   private stopped = false;
@@ -265,6 +272,7 @@ export class HostSession {
         status: r.accepted ? 'connected' : 'pending',
         connected: r.accepted,
         reclaiming: !r.accepted && Boolean(r.reclaimPlayerId),
+        kicked: !r.accepted && r.kickedRejoin,
       });
     }
     return out;
@@ -299,43 +307,49 @@ export class HostSession {
         return;
       }
 
-      // After the game starts no new seats can be created. The banker may
-      // still explicitly re-admit an existing seat when a device lost its
-      // local join key (private window, cleared storage, new browser).
-      if (bundle.game.status !== 'pending') {
-        const player = findReclaimablePlayer(
-          bundle.players,
-          record.name,
-          record.reclaimPlayerId
-        );
-        if (!player) {
-          this.reject(
-            record,
-            'This game has already started and that seat no longer exists. Ask the banker to check your name.'
-          );
-          return;
-        }
+      // A kicked device, a lost join key, or a reclaim after the start all point
+      // at an existing ledger row. Reuse it so approving never seats a duplicate.
+      const reclaimed =
+        (record.reclaimPlayerId
+          ? bundle.players.find((p) => p.id === record.reclaimPlayerId)
+          : undefined) ??
+        (bundle.game.status !== 'pending'
+          ? findReclaimablePlayer(bundle.players, record.name, record.reclaimPlayerId)
+          : undefined);
+
+      if (reclaimed) {
         const token = newPlayerToken();
-        this.tokens.set(player.id, token);
+        this.tokens.set(reclaimed.id, token);
         // Rebind the durable seat to this device. The old key is revoked so a
         // stale copy of the credentials cannot keep claiming the same seat.
         for (const [key, res] of [...this.reservations.entries()]) {
-          if (res.playerId === player.id && key !== joinKey) {
+          if (res.playerId === reclaimed.id && key !== joinKey) {
             this.reservations.delete(key);
             this.notifiedJoinKeys.delete(key);
           }
         }
         this.reservations.set(joinKey, {
           joinKey,
-          playerId: player.id,
+          playerId: reclaimed.id,
           playerToken: token,
-          name: player.name,
+          name: reclaimed.name,
           gameId: this.gameId,
           status: 'seated',
           createdAt: Date.now(),
         });
         await this.saveCredentials();
-        await this.accept(record, player.id, token);
+        await this.accept(record, reclaimed.id, token);
+        return;
+      }
+
+      // After the game starts no new seats can be created.
+      if (bundle.game.status !== 'pending') {
+        this.reject(
+          record,
+          record.kickedRejoin
+            ? 'That seat is no longer on this game. Ask the banker to seat you again before the game starts.'
+            : 'This game has already started and that seat no longer exists. Ask the banker to check your name.'
+        );
         return;
       }
 
@@ -386,6 +400,9 @@ export class HostSession {
     const record = this.connections.get(sessionId);
     if (!record) return;
     if (record.playerId) {
+      // Remember the seat so a later rejoin is offered to the banker instead of
+      // being rejected as a stranger once the game has started.
+      this.kickedSeats.set(record.playerId, record.name);
       this.tokens.delete(record.playerId);
       for (const [key, res] of this.reservations) {
         if (res.playerId === record.playerId) {
@@ -398,6 +415,19 @@ export class HostSession {
     if (record.joinKey) this.notifiedJoinKeys.delete(record.joinKey);
     this.send(record, { t: 'host-bye', code: 'removed', reason: 'Removed by the banker' });
     this.closeSoon(record);
+  }
+
+  /**
+   * Returns the seat id when this join request comes from a device the banker
+   * kicked earlier and still names the same seat. The stale playerId is only
+   * trusted for surfacing the request — the banker still has to approve it.
+   */
+  private kickedRejoinFor(playerId: string | undefined, name: string): string | null {
+    if (!playerId) return null;
+    const kickedName = this.kickedSeats.get(playerId);
+    if (kickedName === undefined) return null;
+    if (kickedName && normalizedName(kickedName) !== normalizedName(name)) return null;
+    return playerId;
   }
 
   stop(options: StopOptions = {}): void {
@@ -549,6 +579,7 @@ export class HostSession {
       playerId: null,
       joinKey: '',
       reclaimPlayerId: null,
+      kickedRejoin: false,
       accepted: false,
       accepting: false,
       joining: false,
@@ -762,12 +793,16 @@ export class HostSession {
       this.reject(record, 'Game not found on the host');
       return;
     }
+    // A kicked device keeps its old playerId, so it can be recognized even when
+    // the name is duplicated or the game has already started. It still needs an
+    // explicit banker approval before the seat is restored.
+    const kickedId = this.kickedRejoinFor(msg.playerId, name);
     if (bundle.game.status !== 'pending') {
       // A cleared/private-window device has no local joinKey, so it cannot be
       // verified automatically. Surface the request to the banker instead of
       // rejecting outright; they can explicitly re-admit a matching seat.
-      const player = findReclaimablePlayer(bundle.players, name);
-      if (!player) {
+      const player = findReclaimablePlayer(bundle.players, name, kickedId);
+      if (!player && !kickedId) {
         const ambiguous = bundle.players.some(
           (p) => normalizedName(p.name) === normalizedName(name)
         );
@@ -779,9 +814,11 @@ export class HostSession {
         );
         return;
       }
-      record.reclaimPlayerId = player.id;
+      record.reclaimPlayerId = player?.id ?? kickedId;
+      record.kickedRejoin = Boolean(kickedId);
     } else {
-      record.reclaimPlayerId = null;
+      record.reclaimPlayerId = kickedId;
+      record.kickedRejoin = Boolean(kickedId);
       if (!seated && bundle.players.length >= MAX_SEATS) {
         this.reject(record, 'This table is full');
         return;
@@ -899,6 +936,8 @@ export class HostSession {
       record.playerId = playerId;
       record.name = player.name;
       record.joining = false;
+      record.kickedRejoin = false;
+      this.kickedSeats.delete(playerId);
       const buffered = record.joinBuffer;
       record.joinBuffer = [];
       this.send(record, accepted);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildJoinUrl, isLoopbackOrigin } from './joinUrl';
+import { buildJoinUrl, buildShareUrl, isLoopbackOrigin } from './joinUrl';
 
 Object.defineProperty(globalThis, 'window', {
   value: { location: { origin: 'http://localhost:3000', pathname: '/app/' } },
@@ -29,4 +29,14 @@ test('join URLs use the current origin or a configured public base', () => {
     buildJoinUrl('bad room!', 'https://example.com'),
     'https://example.com/?join=badroom'
   );
+});
+
+test('share URLs target the standalone share screen', () => {
+  assert.equal(buildShareUrl('room-1'), 'http://localhost:3000/app/?share=room-1');
+  assert.equal(
+    buildShareUrl('room-1', 'https://example.com/banker/', 'Game Night'),
+    'https://example.com/banker/?share=room-1&name=Game+Night'
+  );
+  assert.equal(buildShareUrl('bad room!', 'https://example.com'), 'https://example.com/?share=badroom');
+  assert.equal(buildShareUrl(''), '');
 });

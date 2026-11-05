@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
-import { buildJoinUrl, isLoopbackOrigin } from '../lib/net/joinUrl';
+import { buildJoinUrl, buildShareUrl, isLoopbackOrigin } from '../lib/net/joinUrl';
+import { JoinQr } from './JoinQr';
 
 export const HostSessionPanel: React.FC = () => {
   const {
@@ -19,6 +20,7 @@ export const HostSessionPanel: React.FC = () => {
   } = useGame();
   const [starting, setStarting] = useState(false);
   const [reclaiming, setReclaiming] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const [publicBase, setPublicBase] = useState(() => {
     try {
       return localStorage.getItem('banker_public_url') || '';
@@ -54,6 +56,24 @@ export const HostSessionPanel: React.FC = () => {
     } catch {
       showToast('Copy failed — select the link manually', 'error');
     }
+  };
+
+  const handleCopyRoom = async () => {
+    if (!roomCode) return;
+    try {
+      await navigator.clipboard.writeText(roomCode);
+      showToast('Room code copied', 'success', 1800);
+    } catch {
+      showToast('Copy failed — select the code manually', 'error');
+    }
+  };
+
+  const handleShareTab = () => {
+    if (!roomCode) return;
+    const url = buildShareUrl(roomCode, publicBase.trim() || undefined, game?.name);
+    // A second tab/window is easier to hand around or put on a second screen
+    // than copy-pasting the join URL.
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   if (sessionRole !== 'host') {
@@ -95,9 +115,24 @@ export const HostSessionPanel: React.FC = () => {
         <div className="host-room-row">
           <div className="host-room-code">
             <span className="label">Room code</span>
-            <strong className="mono-num" id="host-room-code">{roomCode}</strong>
+            <div className="host-room-code-value">
+              <strong className="mono-num" id="host-room-code">{roomCode}</strong>
+              <button className="btn btn-ghost btn-xs" onClick={handleCopyRoom}>
+                Copy
+              </button>
+            </div>
           </div>
           <div className="host-room-actions">
+            <button className="btn btn-primary btn-sm" onClick={handleShareTab}>
+              Share screen
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowQr((value) => !value)}
+              aria-expanded={showQr}
+            >
+              {showQr ? 'Hide QR' : 'Show QR'}
+            </button>
             <button className="btn btn-secondary btn-sm" onClick={handleCopy}>
               Copy join link
             </button>
@@ -110,6 +145,20 @@ export const HostSessionPanel: React.FC = () => {
         {effectiveJoinUrl && (
           <div className="host-join-url mono-num" id="host-join-url" title={effectiveJoinUrl}>
             {effectiveJoinUrl}
+          </div>
+        )}
+
+        {showQr && effectiveJoinUrl && (
+          <div className="host-share-qr" id="host-share-qr">
+            <JoinQr value={effectiveJoinUrl} size={168} />
+            <div className="host-share-qr-meta">
+              <span className="label">Scan to join</span>
+              <strong className="mono-num">{roomCode}</strong>
+              <span className="text-xs text-muted">
+                Point a phone camera here. For a bigger display, open the share screen in its own
+                tab.
+              </span>
+            </div>
           </div>
         )}
 
@@ -170,7 +219,11 @@ export const HostSessionPanel: React.FC = () => {
                   <div>
                     <strong>{peer.name}</strong>
                     <div className="text-xs text-muted">
-                      {peer.reclaiming ? 'Reconnecting to an existing seat' : 'Waiting for approval'}
+                      {peer.kicked
+                        ? 'Was removed — allow to rejoin the same seat'
+                        : peer.reclaiming
+                          ? 'Reconnecting to an existing seat'
+                          : 'Waiting for approval'}
                     </div>
                   </div>
                   <div className="host-peer-actions">

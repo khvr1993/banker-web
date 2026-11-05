@@ -32,6 +32,8 @@ export interface ClientSessionHandlers {
   onJoined: (info: { playerId: string; gameId: string }) => void;
   onPending: () => void;
   onRejected: (reason: string) => void;
+  /** The banker kicked this device. A fresh join request can be sent. */
+  onKicked?: (reason: string) => void;
   onEvent: (event: RemoteEvent) => void;
   onError: (message: string) => void;
   onLatency?: (ms: number) => void;
@@ -572,6 +574,7 @@ export class ClientSession {
       // failJoin clears the handshake/pending-ack timers, stops reconnects, and
       // rejects any in-flight join so a terminal bye cannot be followed by a
       // spurious JOIN_TIMEOUT later.
+      if (msg.code === 'removed') this.handlers.onKicked?.(msg.reason);
       this.handlers.onRejected(msg.reason);
       this.failJoin(new Error(msg.reason));
       return;

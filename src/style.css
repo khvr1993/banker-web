@@ -1948,3 +1948,205 @@ html, body {
     padding: 16px;
   }
 }
+
+/* QR codes and the standalone share screen */
+
+.join-qr {
+  display: block;
+  border-radius: var(--radius-sm);
+  background-color: #ffffff;
+  image-rendering: pixelated;
+}
+
+.join-qr-loading {
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  animation: qr-pulse 1.2s ease-in-out infinite;
+}
+
+.join-qr-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+@keyframes qr-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.host-room-code-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.host-share-qr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-elevated);
+}
+
+.host-share-qr-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 280px;
+}
+
+.host-share-qr-meta .label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.host-share-qr-meta strong {
+  font-size: 20px;
+  letter-spacing: 0.01em;
+}
+
+.share-screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px;
+  background-color: var(--bg-dark);
+}
+
+.share-card {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 28px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.share-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.share-card h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.share-game {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: -8px;
+}
+
+.share-qr-frame {
+  padding: 12px;
+  line-height: 0;
+  background-color: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.share-room {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.share-room .label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.share-room strong {
+  font-size: 18px;
+}
+
+.share-url {
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-steps {
+  width: 100%;
+  margin: 0;
+  padding-left: 18px;
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.share-back {
+  align-self: center;
+}
+
+.share-card .join-status {
+  width: 100%;
+  text-align: left;
+}
+
+@media (max-width: 640px) {
+  .share-card {
+    padding: 20px;
+  }
+
+  .share-card h1 {
+    font-size: 24px;
+  }
+
+  .share-qr-frame .join-qr {
+    width: 240px;
+    height: 240px;
+  }
+
+  .host-share-qr {
+    justify-content: center;
+  }
+}

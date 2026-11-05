@@ -40,7 +40,9 @@ Notes and caveats:
 - Players can refresh or reopen the link to rejoin the same seat. Each device keeps a random
   128-bit `joinKey` in `localStorage`; the host durably reserves seats in IndexedDB, so a lost
   join acknowledgment or a reload recovers the seat without banker approval.
-- A banker can **Kick** a device. Kicking revokes its key, so the player must be approved again.
+- A banker can **Kick** a device. Kicking revokes its key, but the player is not locked out: asking
+  to rejoin (even after the game has started) queues a request in **Hosted Session**, where the
+  banker can **Allow** the player back into the same seat or **Deny** it.
 - Only reconnecting an existing seat is supported after the game starts. Seat players before starting.
   If a device loses its key (for example a closed private window or cleared browser storage), the
   player re-enters the **same display name** and the request appears in Hosted Session; the banker
@@ -59,6 +61,12 @@ A `localhost` / `127.0.0.1` / `file:` join link only works on the banker machine
 open the app on your computer via its LAN IP (for example `http://192.168.1.20:3000`) or set a
 **Public base URL** in the Hosted Session card. The host UI warns when the copied link is
 loopback. Joining by room code always works without any configuration.
+
+For sharing, the Hosted Session card has a **Share screen** button that opens a standalone page
+in a second tab/window with a large scannable **QR code**, the room code, and a copy button. This
+avoids typing or pasting URLs on phones. **Show QR** displays a smaller code inline in the host
+panel. The share page works on a second display but still points at the same public base URL
+rules above — if it is opened on localhost, the page warns that phones cannot reach it.
 
 ### Troubleshooting
 
