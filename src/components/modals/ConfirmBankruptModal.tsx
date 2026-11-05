@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { sound } from '../../lib/sound';
 import { Player } from '../../types';
 
@@ -13,7 +13,7 @@ export const ConfirmBankruptModal: React.FC = () => {
     if (!game || !player) return;
     try {
       setSubmitting(true);
-      await localApi(`/games/${game.id}/players/${player.id}/bankrupt`, {
+      await gameApi(`/games/${game.id}/players/${player.id}/bankrupt`, {
         method: 'POST',
       });
       sound.playVoid();

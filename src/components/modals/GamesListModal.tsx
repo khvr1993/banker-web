@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { formatMoney } from '../../lib/constants';
 import { Game } from '../../types';
 
@@ -15,7 +15,7 @@ export const GamesListModal: React.FC = () => {
     const fetchGames = async () => {
       try {
         setLoading(true);
-        const data = await localApi('/games');
+        const data = await gameApi('/games');
         setGames(data.games || []);
       } catch (err: any) {
         setError(err.message || 'Failed to load games');

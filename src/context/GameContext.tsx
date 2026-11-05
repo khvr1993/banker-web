@@ -1,7 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Game, Player, Transaction, BankInfo, ToastMessage } from '../types';
-import { localApi } from '../lib/api';
+import { gameApi, setClientSession } from '../lib/gameApi';
+import { Journal, setCommitListener } from '../lib/db';
+import { applyMirrorDelta, applyMirrorSnapshot, configureMirrorStorage } from '../lib/remoteDb';
+import { HostSession, RemotePeerInfo } from '../lib/net/hostSession';
+import { ClientSession } from '../lib/net/clientSession';
+import { normalizeRoom } from '../lib/net/protocol';
 import { sound } from '../lib/sound';
+
+type SessionRole = 'local' | 'host' | 'client';
+type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
 interface ModalState {
   name: string | null;
@@ -35,6 +43,26 @@ interface GameContextType {
   setMyPlayerId: (id: string | null) => void;
   loadGame: (id: string) => Promise<void>;
   refreshActiveGame: () => Promise<void>;
+  // Multiplayer session
+  sessionRole: SessionRole;
+  connectionState: ConnectionState;
+  roomCode: string | null;
+  joinUrl: string | null;
+  hostRev: number;
+  remotePeers: RemotePeerInfo[];
+  hostOnline: boolean;
+  joinRoomToken: string | null;
+  sessionError: string | null;
+  sessionReady: boolean;
+  joinPending: boolean;
+  latencyMs: number;
+  startHosting: () => Promise<void>;
+  stopHosting: () => void;
+  joinSession: (room: string, name: string) => Promise<void>;
+  leaveSession: () => void;
+  approveJoin: (sessionId: string) => Promise<void>;
+  denyJoin: (sessionId: string) => void;
+  kickPeer: (sessionId: string) => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -49,6 +77,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [modalState, setModalState] = useState<ModalState>({ name: null, payload: null });
   const [activeTransferTab, setActiveTransferTab] = useState<string>('bank-pay');
   const [customDesc, setCustomDesc] = useState<string>('');
+
+  const [sessionRole, setSessionRole] = useState<SessionRole>('local');
+  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
+  const [roomCode, setRoomCode] = useState<string | null>(null);
+  const [joinUrl, setJoinUrl] = useState<string | null>(null);
+  const [hostRev, setHostRev] = useState(0);
+  const [remotePeers, setRemotePeers] = useState<RemotePeerInfo[]>([]);
+  const [hostOnline, setHostOnline] = useState(false);
+  const [joinRoomToken, setJoinRoomToken] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [joinPending, setJoinPending] = useState(false);
+  const [latencyMs, setLatencyMs] = useState(0);
+
+  const hostRef = useRef<HostSession | null>(null);
+  const clientRef = useRef<ClientSession | null>(null);
+  const sessionRoleRef = useRef<SessionRole>('local');
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const autoHostTriedRef = useRef<string | null>(null);
+  const hostStartingRef = useRef(false);
 
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     return localStorage.getItem('banker_sound') !== 'false';
@@ -118,12 +166,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const setAppMode = useCallback((mode: 'banker' | 'player') => {
-    setAppModeState(mode);
-    localStorage.setItem('banker_app_mode', mode);
-    if (mode === 'banker') {
+    const next = sessionRoleRef.current === 'client' ? 'player' : mode;
+    setAppModeState(next);
+    if (next === 'player') setActiveTransferTab('custom');
+    localStorage.setItem('banker_app_mode', next);
+    if (next === 'banker') {
       setActiveTransferTab((prev) => (prev !== 'bank-pay' && prev !== 'custom' ? 'bank-pay' : prev));
-    } else {
-      setActiveTransferTab('custom');
     }
   }, []);
 
@@ -143,15 +191,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentGameId(gameId);
       localStorage.setItem('banker_last_game_id', gameId);
 
-      const savedPlayer = localStorage.getItem('banker_player_id_' + gameId);
-      if (savedPlayer) {
-        setMyPlayerIdState(savedPlayer);
+      if (sessionRoleRef.current !== 'client') {
+        const savedPlayer = localStorage.getItem('banker_player_id_' + gameId);
+        if (savedPlayer) {
+          setMyPlayerIdState(savedPlayer);
+        }
       }
 
       const [gameData, txnsData, bankData] = await Promise.all([
-        localApi(`/games/${gameId}`),
-        localApi(`/games/${gameId}/ledger`),
-        localApi(`/games/${gameId}/bank`).catch(() => null),
+        gameApi(`/games/${gameId}`),
+        gameApi(`/games/${gameId}/ledger`),
+        gameApi(`/games/${gameId}/bank`).catch(() => null),
       ]);
 
       setGame(gameData);
@@ -169,9 +219,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentGameId) return;
     try {
       const [gameData, txnsData, bankData] = await Promise.all([
-        localApi(`/games/${currentGameId}`),
-        localApi(`/games/${currentGameId}/ledger`),
-        localApi(`/games/${currentGameId}/bank`).catch(() => null),
+        gameApi(`/games/${currentGameId}`),
+        gameApi(`/games/${currentGameId}/ledger`),
+        gameApi(`/games/${currentGameId}/bank`).catch(() => null),
       ]);
 
       setGame(gameData);
@@ -183,18 +233,264 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentGameId]);
 
-  // Polling every 2.5s for real-time reactivity
+  useEffect(() => {
+    refreshRef.current = refreshActiveGame;
+  }, [refreshActiveGame]);
+
+  // Local/host poll fast; clients are delta-driven with a slow repair poll.
   useEffect(() => {
     if (!currentGameId) return;
-    const interval = setInterval(() => {
-      refreshActiveGame();
-    }, 2500);
+    const interval = setInterval(
+      () => {
+        refreshActiveGame();
+      },
+      sessionRole === 'client' ? 10000 : 2500
+    );
     return () => clearInterval(interval);
-  }, [currentGameId, refreshActiveGame]);
+  }, [currentGameId, refreshActiveGame, sessionRole]);
 
-  // Initial load
+  const applySessionRole = useCallback((role: SessionRole) => {
+    sessionRoleRef.current = role;
+    setSessionRole(role);
+  }, []);
+
+  const startHosting = useCallback(async () => {
+    if (hostRef.current || hostStartingRef.current) return;
+    if (!game || !currentGameId) {
+      showToast('Open a game before hosting a session', 'error');
+      return;
+    }
+    hostStartingRef.current = true;
+    try {
+      setConnectionState('connecting');
+      const session = await HostSession.start({
+        room: game.join_token,
+        gameId: currentGameId,
+        onPeersChanged: (peers) => setRemotePeers(peers),
+        onJoinRequest: (peer) => showToast(`${peer.name} wants to join`, 'info', 6000),
+        onError: (msg) => showToast(msg, 'error'),
+        onLog: (msg) => console.info('[host]', msg),
+      });
+      hostRef.current = session;
+      applySessionRole('host');
+      setRoomCode(session.room);
+      setJoinUrl(session.joinUrl);
+      setConnectionState('connected');
+      setHostOnline(true);
+      setCommitListener((j: Journal) => {
+        hostRef.current?.broadcastJournal(j);
+        setHostRev(hostRef.current?.hostRev ?? 0);
+        void refreshRef.current();
+      });
+      try {
+        localStorage.setItem('banker_hosting_' + currentGameId, '1');
+      } catch {
+        // ignore storage failures
+      }
+      showToast('Session live — share the join link with players', 'success', 5000);
+    } catch (err: any) {
+      setConnectionState('error');
+      const message =
+        err?.type === 'browser-incompatible'
+          ? 'This browser does not support WebRTC multiplayer'
+          : err?.message || 'Could not start the hosted session';
+      showToast(message, 'error');
+    } finally {
+      hostStartingRef.current = false;
+    }
+  }, [game, currentGameId, applySessionRole, showToast]);
+
+  const stopHosting = useCallback(() => {
+    hostRef.current?.stop();
+    hostRef.current = null;
+    if (currentGameId) {
+      try {
+        localStorage.removeItem('banker_hosting_' + currentGameId);
+      } catch {
+        // ignore storage failures
+      }
+    }
+    setCommitListener(null);
+    applySessionRole('local');
+    setConnectionState('idle');
+    setRoomCode(null);
+    setJoinUrl(null);
+    setRemotePeers([]);
+    setHostOnline(false);
+    setHostRev(0);
+    showToast('Hosted session stopped', 'info');
+  }, [currentGameId, applySessionRole, showToast]);
+
+  // Host reload recovery: resume hosting so reconnecting phones resync.
+  useEffect(() => {
+    if (!game || !currentGameId || sessionRole !== 'local' || hostRef.current) return;
+    if (autoHostTriedRef.current === currentGameId) return;
+    let flagged = false;
+    try {
+      flagged = localStorage.getItem('banker_hosting_' + currentGameId) === '1';
+    } catch {
+      flagged = false;
+    }
+    if (!flagged) return;
+    autoHostTriedRef.current = currentGameId;
+    void startHosting();
+  }, [game, currentGameId, sessionRole, startHosting]);
+
+  const joinSession = useCallback(
+    async (room: string, name: string) => {
+      const cleanRoom = normalizeRoom(room);
+      if (!cleanRoom) {
+        setSessionError('Enter a valid room code or join link');
+        return;
+      }
+      clientRef.current?.leave();
+      clientRef.current = null;
+      configureMirrorStorage();
+      applySessionRole('client');
+      setAppModeState('player');
+      setActiveTransferTab('custom');
+      setSessionReady(false);
+      setSessionError(null);
+      setJoinPending(false);
+      setConnectionState('connecting');
+      setJoinRoomToken(cleanRoom);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('join', cleanRoom);
+        window.history.replaceState(null, '', url.toString());
+      } catch {
+        // ignore history failures
+      }
+
+      let session: ClientSession | null = null;
+      try {
+        session = await ClientSession.create(cleanRoom, {
+          onSnapshot: async (snapshot, gameId) => {
+            await applyMirrorSnapshot(snapshot);
+            if (gameId) {
+              try {
+                await loadGame(gameId);
+              } catch (err) {
+                console.warn('Mirror load failed:', err);
+              }
+            }
+            setHostOnline(true);
+          },
+          onDelta: async (journal) => {
+            await applyMirrorDelta(journal);
+            await refreshRef.current();
+          },
+          onStatus: (state) => {
+            setConnectionState(state);
+            setHostOnline(state === 'connected');
+            if (state === 'connected') setLatencyMs(session?.latencyMs ?? 0);
+          },
+          onJoined: (info) => {
+            setMyPlayerIdState(info.playerId);
+            setSessionReady(true);
+            setJoinPending(false);
+            setSessionError(null);
+            setHostOnline(true);
+            setLatencyMs(session?.latencyMs ?? 0);
+          },
+          onPending: () => {
+            setJoinPending(true);
+            setConnectionState('connecting');
+          },
+          onRejected: (reason) => {
+            setJoinPending(false);
+            setSessionError(reason);
+            setConnectionState('error');
+            setSessionReady(false);
+          },
+          onEvent: (event) => {
+            if (event.kind === 'round') {
+              sound.playRoundBell();
+              showToast(event.round ? `Round ${event.round} started` : 'A new round started', 'info');
+            } else if (event.kind === 'void') {
+              sound.playVoid();
+              showToast('A transaction was voided by the banker', 'info');
+            } else if (event.description) {
+              sound.playCoin();
+              showToast(event.description, 'success', 2500);
+            }
+          },
+          onError: (message) => setSessionError(message),
+        });
+        clientRef.current = session;
+        setClientSession(session);
+        await session.join(name);
+        const gameId = session.currentGameId;
+        if (gameId) await loadGame(gameId);
+        setSessionReady(true);
+        setConnectionState('connected');
+      } catch (err: any) {
+        if (session && clientRef.current === session) {
+          session.leave();
+          clientRef.current = null;
+          setClientSession(null);
+        }
+        setSessionError(err?.message || 'Could not join the session');
+        setConnectionState('error');
+        setSessionReady(false);
+      }
+    },
+    [applySessionRole, loadGame, showToast]
+  );
+
+  const leaveSession = useCallback(() => {
+    clientRef.current?.leave();
+    clientRef.current = null;
+    setClientSession(null);
+    window.location.assign(window.location.pathname);
+  }, []);
+
+  const approveJoin = useCallback(
+    async (sessionId: string) => {
+      try {
+        await hostRef.current?.approve(sessionId);
+        await refreshRef.current();
+      } catch (err: any) {
+        showToast(err.message || 'Failed to approve the player', 'error');
+      }
+    },
+    [showToast]
+  );
+
+  const denyJoin = useCallback((sessionId: string) => {
+    hostRef.current?.deny(sessionId);
+  }, []);
+
+  const kickPeer = useCallback((sessionId: string) => {
+    hostRef.current?.kick(sessionId);
+  }, []);
+
+  // Stop transports when the provider unmounts.
+  useEffect(() => {
+    return () => {
+      hostRef.current?.stop();
+      clientRef.current?.leave();
+      setCommitListener(null);
+    };
+  }, []);
+
+  // Initial load: ?join boots a player session against the mirror database;
+  // otherwise keep the existing local/last-game behavior.
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    const joinParam = urlParams.get('join');
+    if (joinParam) {
+      const room = normalizeRoom(joinParam);
+      configureMirrorStorage();
+      sessionRoleRef.current = 'client';
+      setSessionRole('client');
+      setJoinRoomToken(room);
+      setAppModeState('player');
+      setActiveTransferTab('custom');
+      setConnectionState('connecting');
+      return;
+    }
+
     const gameParam = urlParams.get('game');
     const targetGameId = gameParam || localStorage.getItem('banker_last_game_id');
 
@@ -207,7 +503,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       // Fallback: list games and pick first
       try {
-        const res = await localApi('/games');
+        const res = await gameApi('/games');
         if (res.games && res.games.length > 0) {
           await loadGame(res.games[0].id);
         }
@@ -255,6 +551,25 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setMyPlayerId,
         loadGame,
         refreshActiveGame,
+        sessionRole,
+        connectionState,
+        roomCode,
+        joinUrl,
+        hostRev,
+        remotePeers,
+        hostOnline,
+        joinRoomToken,
+        sessionError,
+        sessionReady,
+        joinPending,
+        latencyMs,
+        startHosting,
+        stopHosting,
+        joinSession,
+        leaveSession,
+        approveJoin,
+        denyJoin,
+        kickPeer,
       }}
     >
       {children}

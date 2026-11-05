@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney, deriveNextSeat } from '../lib/constants';
-import { localApi } from '../lib/api';
+import { gameApi } from '../lib/gameApi';
 import { sound } from '../lib/sound';
+import { HostSessionPanel } from './HostSessionPanel';
 
 export const LobbyView: React.FC = () => {
   const { game, players, showToast, refreshActiveGame } = useGame();
@@ -21,7 +22,7 @@ export const LobbyView: React.FC = () => {
 
     try {
       setSubmitting(true);
-      await localApi(`/games/${game.id}/players`, {
+      await gameApi(`/games/${game.id}/players`, {
         method: 'POST',
         body: { name: clean, seat: nextSeat },
       });
@@ -37,7 +38,7 @@ export const LobbyView: React.FC = () => {
 
   const handleRemovePlayer = async (pid: string) => {
     try {
-      await localApi(`/games/${game.id}/players/${pid}`, { method: 'DELETE' });
+      await gameApi(`/games/${game.id}/players/${pid}`, { method: 'DELETE' });
       showToast('Player removed', 'info');
       await refreshActiveGame();
     } catch (err: any) {
@@ -52,7 +53,7 @@ export const LobbyView: React.FC = () => {
     }
 
     try {
-      await localApi(`/games/${game.id}/start`, { method: 'POST' });
+      await gameApi(`/games/${game.id}/start`, { method: 'POST' });
       sound.playRoundBell();
       showToast('Game started! Starting cash distributed.', 'success');
       await refreshActiveGame();
@@ -96,6 +97,8 @@ export const LobbyView: React.FC = () => {
           <span className="subtext">Configured pass payout</span>
         </div>
       </div>
+
+      <HostSessionPanel />
 
       {/* Seated Players Section */}
       <div className="lobby-grid">

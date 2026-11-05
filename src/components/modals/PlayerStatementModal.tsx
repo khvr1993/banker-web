@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { formatMoney } from '../../lib/constants';
 import { Player, StatementRow } from '../../types';
 
@@ -18,7 +18,7 @@ export const PlayerStatementModal: React.FC = () => {
     const fetchStatement = async () => {
       try {
         setLoading(true);
-        const res = await localApi(`/games/${game.id}/players/${player.id}/ledger`);
+        const res = await gameApi(`/games/${game.id}/players/${player.id}/ledger`);
         const rows: StatementRow[] = res.statement || [];
         rows.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
         setStatement(rows);

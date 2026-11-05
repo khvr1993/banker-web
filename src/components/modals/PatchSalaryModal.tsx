@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { formatMoney } from '../../lib/constants';
 
 export const PatchSalaryModal: React.FC = () => {
@@ -18,7 +18,7 @@ export const PatchSalaryModal: React.FC = () => {
 
     try {
       setSubmitting(true);
-      await localApi(`/games/${game.id}`, {
+      await gameApi(`/games/${game.id}`, {
         method: 'PATCH',
         body: { round_salary: num },
       });

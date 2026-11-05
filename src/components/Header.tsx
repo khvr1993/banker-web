@@ -1,6 +1,7 @@
 import React from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney } from '../lib/constants';
+import { ConnectionPill } from './ConnectionPill';
 
 export const Header: React.FC = () => {
   const {
@@ -12,9 +13,12 @@ export const Header: React.FC = () => {
     theme,
     toggleTheme,
     openModal,
+    sessionRole,
   } = useGame();
 
   const isPlayerMode = appMode === 'player';
+  const isClient = sessionRole === 'client';
+  const canUseBankerTools = !isClient;
   const curr = game?.currency || '₹';
   const initBank = game?.initial_bank_balance || 1;
   const bankBal = game?.bank_balance ?? 0;
@@ -33,6 +37,9 @@ export const Header: React.FC = () => {
 
         {/* Workspace Navigation & Actions */}
         <div className="nav-actions">
+          <ConnectionPill />
+
+          {canUseBankerTools && (
           <button
             id="btn-backup"
             className="btn btn-ghost btn-sm"
@@ -44,6 +51,7 @@ export const Header: React.FC = () => {
             </svg>
             <span className="btn-text">Backup</span>
           </button>
+          )}
 
           <button
             id="btn-toggle-theme"
@@ -85,7 +93,7 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          {(!isPlayerMode || !game) && (
+          {canUseBankerTools && (!isPlayerMode || !game) && (
             <button
               id="btn-open-games-list"
               className="btn btn-secondary btn-sm"
@@ -95,7 +103,7 @@ export const Header: React.FC = () => {
             </button>
           )}
 
-          {(!isPlayerMode || !game) && (
+          {canUseBankerTools && (!isPlayerMode || !game) && (
             <button
               id="btn-new-game-modal"
               className="btn btn-primary btn-sm"
@@ -105,7 +113,7 @@ export const Header: React.FC = () => {
             </button>
           )}
 
-          {game && (
+          {game && !isClient && (
             <button
               id="btn-toggle-mode"
               className={`btn mode-toggle-btn ${isPlayerMode ? 'btn-secondary' : 'btn-emerald'}`}
@@ -137,8 +145,10 @@ export const Header: React.FC = () => {
             type="button"
             className="header-metric-item"
             id="btn-switch-game"
-            title="Click to switch or view games"
-            onClick={() => openModal('games-list')}
+            title={isClient ? 'Current hosted session' : 'Click to switch or view games'}
+            onClick={() => {
+              if (!isClient) openModal('games-list');
+            }}
           >
             <span className="metric-label">Session</span>
             <strong id="hdr-game-name">{game.name}</strong>

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la src/lib/net && echo \"---\" && wc -l src/lib/net/* src/lib/gameApi.ts src/lib/remoteDb.ts src/lib/remoteDb.test.ts src/components/ConnectionPill.tsx src/components/HostSessionPanel.tsx src/components/JoinSessionView.tsx)"
+    ]
+  }
+}

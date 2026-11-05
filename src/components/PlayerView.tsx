@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney } from '../lib/constants';
-import { localApi } from '../lib/api';
+import { gameApi } from '../lib/gameApi';
 import { StatementRow } from '../types';
 import { TransferCard } from './TransferCard';
 
@@ -14,6 +14,9 @@ export const PlayerView: React.FC = () => {
     showToast,
     prevBalances,
     setActiveTransferTab,
+    sessionRole,
+    connectionState,
+    transactions,
   } = useGame();
 
   const [statement, setStatement] = useState<StatementRow[]>([]);
@@ -33,7 +36,7 @@ export const PlayerView: React.FC = () => {
     if (!game) return;
     try {
       setLoadingStatement(true);
-      const res = await localApi(`/games/${game.id}/players/${pid}/ledger`);
+      const res = await gameApi(`/games/${game.id}/players/${pid}/ledger`);
       const rows: StatementRow[] = res.statement || [];
       rows.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
       setStatement(rows);
@@ -44,13 +47,20 @@ export const PlayerView: React.FC = () => {
     }
   };
 
+  // Refetch when the ledger changes (new transfer or void), not only on round change.
+  const ledgerSignature = useMemo(() => {
+    const last = transactions.length > 0 ? transactions[transactions.length - 1] : null;
+    const voided = transactions.reduce((n, t) => n + (t.voided_by_txn ? 1 : 0), 0);
+    return `${transactions.length}:${last?.id ?? ''}:${voided}`;
+  }, [transactions]);
+
   useEffect(() => {
     if (me) {
       fetchPassbook(me.id);
     } else {
       setStatement([]);
     }
-  }, [me?.id, game?.current_round, game?.status]);
+  }, [me?.id, game?.current_round, game?.status, ledgerSignature]);
 
   // Flash animation for my player cash
   useEffect(() => {
@@ -67,6 +77,23 @@ export const PlayerView: React.FC = () => {
   }, [me?.cash, me?.id, prevBalances]);
 
   if (!game) return null;
+
+  if (!me && sessionRole === 'client') {
+    return (
+      <section id="view-player" className="view-panel">
+        <div className="empty-hero">
+          <div className="hero-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+          </div>
+          <h2>Syncing your seat…</h2>
+          <p className="text-muted">The banker is preparing your seat. This screen updates automatically.</p>
+        </div>
+      </section>
+    );
+  }
 
   // Screen 4A: Player Picker if not selected
   if (!me) {
@@ -137,6 +164,19 @@ export const PlayerView: React.FC = () => {
     <section id="view-player" className="view-panel">
       <div id="player-dashboard-screen" className="player-dashboard-screen">
         {/* Game Lifecycle Notice Banners */}
+        {sessionRole === 'client' && connectionState !== 'connected' && (
+          <div id="player-reconnect-banner" className="lifecycle-banner banner-reconnecting">
+            <div>
+              <strong>
+                {connectionState === 'reconnecting' ? 'Reconnecting to the banker…' : 'Connecting to the banker…'}
+              </strong>
+              <p className="text-xs text-muted">
+                Your last synced balances are shown below. Payments resume automatically once the host is back.
+              </p>
+            </div>
+          </div>
+        )}
+
         {game.status === 'pending' && (
           <div id="player-pending-banner" className="lifecycle-banner banner-pending">
             <div>
@@ -178,14 +218,16 @@ export const PlayerView: React.FC = () => {
                 </div>
               </div>
             </div>
-            <button
-              id="btn-switch-my-player"
-              className="btn btn-secondary btn-sm"
-              title="Change your player identity"
-              onClick={() => setMyPlayerId(null)}
-            >
-              Switch Player
-            </button>
+            {sessionRole !== 'client' && (
+              <button
+                id="btn-switch-my-player"
+                className="btn btn-secondary btn-sm"
+                title="Change your player identity"
+                onClick={() => setMyPlayerId(null)}
+              >
+                Switch Player
+              </button>
+            )}
           </div>
 
           <div className={`player-hero-balance-box ${flashClass}`} id="my-player-balance-box">

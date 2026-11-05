@@ -16,6 +16,26 @@ All money movements are kept in a **double-entry ledger** inside your browser's 
 - **Vite** for fast modern bundling and development on port 3000.
 - **IndexedDB** with journal commit semantics for zero-data-loss local persistence.
 
+## Multiplayer (WebRTC)
+
+Play on multiple phones while one device stays the banker. The banker device owns the only
+writable ledger; players receive a disposable mirror database and live deltas.
+
+1. Open a game on the banker device and click **Host Online Session** (in the lobby or console).
+2. Share the room code or the `?join=…` link with players.
+3. Each player opens the link, enters a name, and waits for the banker to tap **Allow**.
+4. Every transfer, void, bankruptcy, and round payout appears on all connected devices.
+
+Notes and caveats:
+
+- Signaling uses PeerJS Cloud; ledger data stays peer-to-peer. Signaling needs internet access.
+- Keep the banker tab open and awake. Reloading the banker page resumes hosting with the same room code; players reconnect automatically.
+- Players can refresh or reopen the link to rejoin the same seat (credentials are stored in `localStorage`).
+- Only reconnecting an existing seat is supported after the game starts. Seat players before starting.
+- Guest Wi-Fi with AP/client isolation blocks peer-to-peer WebRTC. Use a shared hotspot or provide a TURN server by setting `banker_ice_servers` in `localStorage` to a JSON array of `RTCIceServer` objects, e.g.
+  `[{"urls":"turn:turn.example.com:3478","username":"user","credential":"secret"}]`.
+- Player devices never write local/host data: they use the `banker_mirror_db` IndexedDB database. Opening the app without `?join` keeps the original offline mode.
+
 ## Development
 
 ```bash
@@ -24,6 +44,14 @@ npm run dev
 ```
 
 The app will start on `http://localhost:3000`.
+
+### Tests
+
+```bash
+npm test        # node:test via tsx (protocol, codec, authz, mirror storage, session sync)
+npx tsc --noEmit
+npm run build
+```
 
 ## Build
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney, generateIdemKey } from '../lib/constants';
-import { localApi } from '../lib/api';
+import { gameApi } from '../lib/gameApi';
 import { sound } from '../lib/sound';
 import { ACCOUNT_CATEGORIES } from '../lib/domain';
 
@@ -130,7 +130,7 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
     const idemKey = generateIdemKey('transfer');
 
     try {
-      await localApi(`/games/${game.id}/transfers`, {
+      await gameApi(`/games/${game.id}/transfers`, {
         method: 'POST',
         headers: { 'Idempotency-Key': idemKey },
         body: {

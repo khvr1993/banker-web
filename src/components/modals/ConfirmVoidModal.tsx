@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { sound } from '../../lib/sound';
 import { formatMoney } from '../../lib/constants';
 import { Transaction } from '../../types';
@@ -16,7 +16,7 @@ export const ConfirmVoidModal: React.FC = () => {
     if (!game || !txn) return;
     try {
       setSubmitting(true);
-      await localApi(`/games/${game.id}/transfers/${txn.id}/void`, {
+      await gameApi(`/games/${game.id}/transfers/${txn.id}/void`, {
         method: 'POST',
       });
       sound.playVoid();

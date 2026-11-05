@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney } from '../lib/constants';
-import { localApi, downloadGameCsv } from '../lib/api';
+import { downloadGameCsv } from '../lib/api';
+import { gameApi } from '../lib/gameApi';
 import { TransferCard } from './TransferCard';
+import { HostSessionPanel } from './HostSessionPanel';
 
 export const BankerConsoleView: React.FC = () => {
   const {
@@ -55,7 +57,7 @@ export const BankerConsoleView: React.FC = () => {
   const handleFinishGame = async () => {
     if (!window.confirm('Are you sure you want to finish this game? The ledger will become read-only.')) return;
     try {
-      await localApi(`/games/${game.id}/finish`, { method: 'POST' });
+      await gameApi(`/games/${game.id}/finish`, { method: 'POST' });
       showToast('Game finished and archived!', 'info');
       await refreshActiveGame();
     } catch (err: any) {
@@ -122,6 +124,8 @@ export const BankerConsoleView: React.FC = () => {
       {/* Subview 1: Banker Console */}
       {activeTab === 'console' && (
         <div id="subview-console" className="subview-content">
+          <HostSessionPanel />
+
           {/* Game Status Banner if Finished */}
           {game.status === 'finished' && (
             <div id="finished-banner" className="finished-banner">

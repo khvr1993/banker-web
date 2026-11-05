@@ -7,12 +7,27 @@ const DB_VERSION = 1;
 export const STORES = ['games', 'players', 'txns', 'rounds', 'audit'] as const;
 export type StoreName = typeof STORES[number];
 
-let dbPromise: Promise<IDBDatabase> | null = null;
+let activeDbName = DB_NAME;
+const dbPromises = new Map<string, Promise<IDBDatabase>>();
 
-export function openDb(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+/**
+ * Select which IndexedDB database the storage layer reads and writes.
+ * Must be called before the first read after boot (e.g. client mode uses
+ * `banker_mirror_db` so the local/host data stays untouched).
+ */
+export function configureStorage(config: { dbName: string }): void {
+  activeDbName = config.dbName || DB_NAME;
+}
+
+export function activeDbNameValue(): string {
+  return activeDbName;
+}
+
+export function openDb(name: string = activeDbName): Promise<IDBDatabase> {
+  const cached = dbPromises.get(name);
+  if (cached) return cached;
+  const promise = new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       db.createObjectStore('games', { keyPath: 'id' });
@@ -28,13 +43,15 @@ export function openDb(): Promise<IDBDatabase> {
     req.onsuccess = () => {
       req.result.onversionchange = () => {
         req.result.close();
-        dbPromise = null;
+        dbPromises.delete(name);
       };
       resolve(req.result);
     };
     req.onerror = () => reject(req.error);
   });
-  return dbPromise;
+  promise.catch(() => dbPromises.delete(name));
+  dbPromises.set(name, promise);
+  return promise;
 }
 
 function reqToPromise<T>(req: IDBRequest<T>): Promise<T> {
@@ -127,6 +144,19 @@ export interface Journal {
   isEmpty: () => boolean;
 }
 
+export type SerializedJournal = Omit<Journal, 'isEmpty'>;
+
+export function journalToSerialized(j: Journal): SerializedJournal {
+  return {
+    games: j.games,
+    players: j.players,
+    txns: j.txns,
+    rounds: j.rounds,
+    audit: j.audit,
+    deletedPlayers: j.deletedPlayers,
+  };
+}
+
 export function journal(): Journal {
   return {
     games: [],
@@ -148,12 +178,27 @@ export function journal(): Journal {
   };
 }
 
+export type CommitListener = (j: Journal) => void;
+let commitListener: CommitListener | null = null;
+
+/** Registers a post-commit hook (used by the host to broadcast deltas). */
+export function setCommitListener(fn: CommitListener | null): void {
+  commitListener = fn;
+}
+
 export async function commit(j: Journal): Promise<void> {
   if (j.isEmpty()) return;
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORES as unknown as string[], 'readwrite');
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => {
+      try {
+        commitListener?.(j);
+      } catch (err) {
+        console.error('Commit listener failed:', err);
+      }
+      resolve();
+    };
     tx.onabort = () => reject(tx.error || new Error('commit aborted'));
     tx.onerror = () => reject(tx.error || new Error('commit failed'));
 
@@ -174,6 +219,58 @@ export async function clearAll(): Promise<void> {
     tx.onabort = () => reject(tx.error);
     tx.onerror = () => reject(tx.error);
     for (const s of STORES) tx.objectStore(s).clear();
+  });
+}
+
+export interface Dump {
+  games: Game[];
+  players: Player[];
+  txns: Transaction[];
+  rounds: RoundRecord[];
+  audit: AuditRecord[];
+}
+
+/** Reads the full contents of the active database. */
+export async function dumpAll(): Promise<Dump> {
+  return {
+    games: await allInStore<Game>('games'),
+    players: await allInStore<Player>('players'),
+    txns: await allInStore<Transaction>('txns'),
+    rounds: await allInStore<RoundRecord>('rounds'),
+    audit: await allInStore<AuditRecord>('audit'),
+  };
+}
+
+/** Replaces every store with the provided snapshot in a single transaction. */
+export async function applySnapshot(data: Partial<Dump>): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES as unknown as string[], 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('snapshot aborted'));
+    tx.onerror = () => reject(tx.error || new Error('snapshot failed'));
+    for (const s of STORES) {
+      const os = tx.objectStore(s);
+      os.clear();
+      for (const row of (data as Record<string, unknown[]>)[s] || []) os.put(row);
+    }
+  });
+}
+
+/** Upserts a journal delta and applies player deletions. Idempotent. */
+export async function applyDelta(j: Partial<SerializedJournal>): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES as unknown as string[], 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('delta aborted'));
+    tx.onerror = () => reject(tx.error || new Error('delta failed'));
+    for (const g of j.games || []) tx.objectStore('games').put(g);
+    for (const p of j.players || []) tx.objectStore('players').put(p);
+    for (const d of j.deletedPlayers || []) tx.objectStore('players').delete(d.id);
+    for (const t of j.txns || []) tx.objectStore('txns').put(t);
+    for (const r of j.rounds || []) tx.objectStore('rounds').put(r);
+    for (const a of j.audit || []) tx.objectStore('audit').put(a);
   });
 }
 

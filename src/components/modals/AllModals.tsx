@@ -10,10 +10,20 @@ import { ConfirmVoidModal } from './ConfirmVoidModal';
 import { ConfirmBankruptModal } from './ConfirmBankruptModal';
 import { BackupRestoreModal } from './BackupRestoreModal';
 
+const HOST_ONLY_MODALS = new Set([
+  'games-list',
+  'new-game',
+  'patch-salary',
+  'confirm-void',
+  'confirm-bankrupt',
+  'backup',
+]);
+
 export const AllModals: React.FC = () => {
-  const { activeModal } = useGame();
+  const { activeModal, sessionRole } = useGame();
 
   if (!activeModal) return null;
+  if (sessionRole === 'client' && HOST_ONLY_MODALS.has(activeModal)) return null;
 
   switch (activeModal) {
     case 'games-list':

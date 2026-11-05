@@ -1,0 +1,155 @@
+import React, { useState } from 'react';
+import { useGame } from '../context/GameContext';
+
+export const HostSessionPanel: React.FC = () => {
+  const {
+    game,
+    sessionRole,
+    roomCode,
+    joinUrl,
+    remotePeers,
+    connectionState,
+    startHosting,
+    stopHosting,
+    approveJoin,
+    denyJoin,
+    kickPeer,
+    showToast,
+  } = useGame();
+  const [starting, setStarting] = useState(false);
+
+  if (!game || sessionRole === 'client') return null;
+
+  const handleStart = async () => {
+    setStarting(true);
+    try {
+      await startHosting();
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!joinUrl) return;
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      showToast('Join link copied', 'success', 1800);
+    } catch {
+      showToast('Copy failed — select the link manually', 'error');
+    }
+  };
+
+  if (sessionRole !== 'host') {
+    return (
+      <div className="card host-session-card" id="host-session-card">
+        <div className="card-body host-session-idle">
+          <div>
+            <h3>Play together on phones</h3>
+            <p className="text-muted text-sm">
+              Host this table so players can join from their own devices. You stay the banker and keep the
+              authoritative ledger; phones only mirror it.
+            </p>
+          </div>
+          <button
+            className="btn btn-secondary"
+            id="btn-host-session"
+            onClick={handleStart}
+            disabled={starting || connectionState === 'connecting'}
+          >
+            {starting ? 'Starting…' : 'Host Online Session'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const pending = remotePeers.filter((p) => p.status === 'pending');
+  const connected = remotePeers.filter((p) => p.status === 'connected');
+
+  return (
+    <div className="card host-session-card is-live" id="host-session-panel">
+      <div className="card-header">
+        <h3>Hosted Session</h3>
+        <span className="host-live-tag">
+          <span className="connection-dot" aria-hidden="true" /> Live
+        </span>
+      </div>
+      <div className="card-body host-session-body">
+        <div className="host-room-row">
+          <div className="host-room-code">
+            <span className="label">Room code</span>
+            <strong className="mono-num" id="host-room-code">{roomCode}</strong>
+          </div>
+          <div className="host-room-actions">
+            <button className="btn btn-secondary btn-sm" onClick={handleCopy}>
+              Copy join link
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={stopHosting}>
+              Stop hosting
+            </button>
+          </div>
+        </div>
+
+        {joinUrl && (
+          <div className="host-join-url mono-num" id="host-join-url" title={joinUrl}>
+            {joinUrl}
+          </div>
+        )}
+
+        <p className="host-hint text-xs text-muted">
+          Keep this tab open and awake — the banker device must stay connected. Players join from the same
+          Wi-Fi or any network that allows WebRTC.
+        </p>
+
+        {pending.length > 0 && (
+          <div className="host-section">
+            <div className="host-section-title">
+              Join requests <span className="meta-inline mono-num">{pending.length}</span>
+            </div>
+            <div className="host-peer-list">
+              {pending.map((peer) => (
+                <div key={peer.sessionId} className="host-peer-row pending">
+                  <div>
+                    <strong>{peer.name}</strong>
+                    <div className="text-xs text-muted">Waiting for approval</div>
+                  </div>
+                  <div className="host-peer-actions">
+                    <button className="btn btn-primary btn-xs" onClick={() => approveJoin(peer.sessionId)}>
+                      Allow
+                    </button>
+                    <button className="btn btn-ghost btn-xs" onClick={() => denyJoin(peer.sessionId)}>
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="host-section">
+          <div className="host-section-title">
+            Connected devices <span className="meta-inline mono-num">{connected.length}</span>
+          </div>
+          {connected.length === 0 ? (
+            <div className="text-muted text-xs">No phones connected yet.</div>
+          ) : (
+            <div className="host-peer-list">
+              {connected.map((peer) => (
+                <div key={peer.sessionId} className="host-peer-row">
+                  <div>
+                    <strong>{peer.name}</strong>
+                    <div className="text-xs text-muted">Live · seat synced</div>
+                  </div>
+                  <button className="btn btn-ghost btn-xs" onClick={() => kickPeer(peer.sessionId)}>
+                    Kick
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

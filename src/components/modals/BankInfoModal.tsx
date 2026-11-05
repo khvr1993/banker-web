@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
 import { formatMoney } from '../../lib/constants';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 import { BankInfo } from '../../types';
 
 export const BankInfoModal: React.FC = () => {
@@ -10,7 +10,7 @@ export const BankInfoModal: React.FC = () => {
 
   useEffect(() => {
     if (!game) return;
-    localApi(`/games/${game.id}/bank`)
+    gameApi(`/games/${game.id}/bank`)
       .then((res) => setInfo(res))
       .catch((err) => console.warn(err));
   }, [game]);

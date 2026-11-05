@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../../context/GameContext';
-import { localApi } from '../../lib/api';
+import { gameApi } from '../../lib/gameApi';
 
 export const NewGameModal: React.FC = () => {
   const { closeModal, showToast, loadGame } = useGame();
@@ -18,7 +18,7 @@ export const NewGameModal: React.FC = () => {
 
     try {
       setSubmitting(true);
-      const game = await localApi('/games', {
+      const game = await gameApi('/games', {
         method: 'POST',
         body: {
           name: cleanName,
