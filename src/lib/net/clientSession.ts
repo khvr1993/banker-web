@@ -5,12 +5,15 @@ import type { LocalApiOptions } from '../api';
 import { ChunkAssembler, sendMessage } from './codec';
 import { createTransport } from './peerFactory';
 import { Transport, TransportConnection } from './transportTypes';
+import { newJoinKey, sanitizeJoinKey } from './joinKey';
 import {
   ClientMessage,
   CmdMessage,
+  HostByeCode,
   HostMessage,
   RemoteEvent,
   PROTOCOL_VERSION,
+  MAX_MESSAGE_CHARS,
   hostPeerId,
   isHostMessage,
   newClientPeerId,
@@ -30,6 +33,7 @@ export interface ClientSessionHandlers {
   onRejected: (reason: string) => void;
   onEvent: (event: RemoteEvent) => void;
   onError: (message: string) => void;
+  onLatency?: (ms: number) => void;
 }
 
 export interface JoinedInfo {
@@ -37,10 +41,22 @@ export interface JoinedInfo {
   gameId: string;
 }
 
+export interface ClientSessionOptions {
+  handshakeTimeoutMs?: number;
+  pendingAckTimeoutMs?: number;
+}
+
 const COMMAND_TIMEOUT_MS = 7000;
 const MAX_COMMAND_ATTEMPTS = 3;
 const HEARTBEAT_MS = 15000;
 const HEARTBEAT_TIMEOUT_MS = 45000;
+
+const TERMINAL_BYE_CODES = new Set<HostByeCode>([
+  'host-stopped',
+  'game-switched',
+  'removed',
+  'seat-replaced',
+]);
 
 export class RemoteCommandError extends Error {
   status: number;
@@ -63,8 +79,9 @@ interface PendingCommand {
 }
 
 interface StoredCredentials {
-  playerId: string;
-  playerToken: string;
+  joinKey: string;
+  playerId?: string;
+  playerToken?: string;
   gameId?: string;
 }
 
@@ -77,13 +94,18 @@ function readCredentials(room: string): StoredCredentials | null {
     const raw = localStorage.getItem(credentialsKey(room));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.playerId === 'string' && typeof parsed.playerToken === 'string') {
-      return parsed as StoredCredentials;
-    }
+    if (!parsed || typeof parsed !== 'object') return null;
+    // Legacy v1 records have no joinKey; adopt one so the seat stays reachable.
+    const joinKey = sanitizeJoinKey(parsed.joinKey) || newJoinKey();
+    return {
+      joinKey,
+      playerId: typeof parsed.playerId === 'string' ? parsed.playerId : undefined,
+      playerToken: typeof parsed.playerToken === 'string' ? parsed.playerToken : undefined,
+      gameId: typeof parsed.gameId === 'string' ? parsed.gameId : undefined,
+    };
   } catch {
-    // ignore malformed credentials
+    return null;
   }
-  return null;
 }
 
 function writeCredentials(room: string, creds: StoredCredentials): void {
@@ -98,11 +120,13 @@ export class ClientSession {
   readonly room: string;
 
   private handlers: ClientSessionHandlers;
+  private options: ClientSessionOptions;
   private transport: Transport | null = null;
   private connection: TransportConnection | null = null;
   private assembler = new ChunkAssembler();
   private pending = new Map<string, PendingCommand>();
 
+  private joinKey: string;
   private playerId: string | null = null;
   private playerToken: string | null = null;
   private gameId: string | null = null;
@@ -114,6 +138,9 @@ export class ClientSession {
   private joinName = '';
   private joinPromise: { resolve: (value: JoinedInfo) => void; reject: (reason: Error) => void } | null = null;
   private pendingApproval = false;
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingAckTimer: ReturnType<typeof setTimeout> | null = null;
+  private deltaFailures = 0;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -123,19 +150,28 @@ export class ClientSession {
   private lastResyncAt = 0;
   private messageQueue: Promise<void> = Promise.resolve();
 
-  private constructor(room: string, handlers: ClientSessionHandlers) {
+  private constructor(
+    room: string,
+    handlers: ClientSessionHandlers,
+    options: ClientSessionOptions = {}
+  ) {
     this.room = normalizeRoom(room);
     this.handlers = handlers;
+    this.options = options;
     const stored = readCredentials(this.room);
-    if (stored) {
-      this.playerId = stored.playerId;
-      this.playerToken = stored.playerToken;
-      this.gameId = stored.gameId || null;
-    }
+    this.joinKey = stored?.joinKey || newJoinKey();
+    this.playerId = stored?.playerId || null;
+    this.playerToken = stored?.playerToken || null;
+    this.gameId = stored?.gameId || null;
+    this.persistCredentials();
   }
 
-  static async create(room: string, handlers: ClientSessionHandlers): Promise<ClientSession> {
-    const session = new ClientSession(room, handlers);
+  static async create(
+    room: string,
+    handlers: ClientSessionHandlers,
+    options: ClientSessionOptions = {}
+  ): Promise<ClientSession> {
+    const session = new ClientSession(room, handlers, options);
     await session.openTransport();
     return session;
   }
@@ -150,6 +186,15 @@ export class ClientSession {
 
   get currentGameId(): string | null {
     return this.gameId;
+  }
+
+  private persistCredentials(): void {
+    writeCredentials(this.room, {
+      joinKey: this.joinKey,
+      playerId: this.playerId || undefined,
+      playerToken: this.playerToken || undefined,
+      gameId: this.gameId || undefined,
+    });
   }
 
   private async openTransport(): Promise<void> {
@@ -191,6 +236,7 @@ export class ClientSession {
       t: 'hello',
       protocol: PROTOCOL_VERSION,
       room: this.room,
+      joinKey: this.joinKey,
       playerId: this.playerId || undefined,
       playerToken: this.playerToken || undefined,
     });
@@ -205,16 +251,78 @@ export class ClientSession {
     }
     return new Promise<JoinedInfo>((resolve, reject) => {
       this.joinPromise = { resolve, reject };
+      this.armHandshakeTimer();
       if (this.welcomed) this.sendJoinRequest();
     });
+  }
+
+  private armHandshakeTimer(): void {
+    this.clearHandshakeTimer();
+    const timeoutMs = this.options.handshakeTimeoutMs ?? 15_000;
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = null;
+      this.failJoin(
+        new RemoteCommandError(
+          504,
+          'JOIN_TIMEOUT',
+          'The banker did not answer. Check the room code and try again.'
+        )
+      );
+    }, timeoutMs);
+  }
+
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = null;
+  }
+
+  private armPendingAckTimer(): void {
+    if (this.accepted) return;
+    this.clearPendingAckTimer();
+    const timeoutMs = this.options.pendingAckTimeoutMs ?? 10_000;
+    this.pendingAckTimer = setTimeout(() => {
+      this.pendingAckTimer = null;
+      this.failJoin(
+        new RemoteCommandError(
+          504,
+          'JOIN_TIMEOUT',
+          'The banker did not answer. Check the room code and try again.'
+        )
+      );
+    }, timeoutMs);
+  }
+
+  private clearPendingAckTimer(): void {
+    if (this.pendingAckTimer) clearTimeout(this.pendingAckTimer);
+    this.pendingAckTimer = null;
+  }
+
+  private failJoin(error: Error): void {
+    const pending = this.joinPromise;
+    this.joinPromise = null;
+    this.clearHandshakeTimer();
+    this.clearPendingAckTimer();
+    if (pending) pending.reject(error);
+    this.accepted = false;
+    this.disposed = true;
+    this.stopHeartbeat();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.failPending(error.message);
+    this.handlers.onError(error.message || 'Could not join the session');
+    this.handlers.onStatus('error');
+    this.closeResources();
   }
 
   private sendJoinRequest(): void {
     if (this.disposed) return;
     this.pendingApproval = true;
+    this.clearHandshakeTimer();
+    this.armPendingAckTimer();
     this.send({
       t: 'join-request',
       name: this.joinName || 'Player',
+      joinKey: this.joinKey,
       playerId: this.playerId || undefined,
       playerToken: this.playerToken || undefined,
     });
@@ -223,6 +331,7 @@ export class ClientSession {
   // ---------- inbound messages ----------
 
   private handleRaw(raw: unknown): void {
+    if (typeof raw === 'string' && raw.length > MAX_MESSAGE_CHARS) return;
     let msg = parseIncoming(raw);
     if (!msg || typeof msg !== 'object') return;
     if ((msg as any).t === 'chunk') {
@@ -241,24 +350,20 @@ export class ClientSession {
     try {
       switch (msg.t) {
         case 'welcome':
+          // Capability probe only: no ledger data before banker approval.
           this.welcomed = true;
-          this.gameId = msg.gameId;
-          this.rev = msg.rev;
-          await this.handlers.onSnapshot(msg.snapshot, msg.gameId);
           if (this.joinName) this.sendJoinRequest();
           break;
         case 'join-pending':
           this.pendingApproval = true;
+          this.clearPendingAckTimer();
           this.handlers.onPending();
           break;
         case 'join-rejected':
           this.pendingApproval = false;
+          this.clearPendingAckTimer();
           this.handlers.onRejected(msg.reason);
-          if (this.joinPromise) {
-            const pending = this.joinPromise;
-            this.joinPromise = null;
-            pending.reject(new Error(msg.reason));
-          }
+          this.failJoin(new Error(msg.reason));
           break;
         case 'join-accepted':
           await this.handleAccepted(msg);
@@ -282,40 +387,54 @@ export class ClientSession {
         case 'event':
           this.handlers.onEvent(msg.event);
           break;
-        case 'pong':
+        case 'pong': {
           this.lastPongAt = Date.now();
-          this.latency = Math.max(0, Date.now() - Number(msg.ts || 0));
+          const ms = Math.max(0, Date.now() - Number(msg.ts || 0));
+          this.latency = ms;
+          this.handlers.onLatency?.(ms);
           break;
+        }
         case 'host-bye':
-          this.handleHostBye(msg.reason);
+          this.handleHostBye(msg);
           break;
         default:
           break;
       }
     } catch (err: any) {
       console.error('Client message handling failed:', err);
+      this.failJoin(err instanceof Error ? err : new Error(String(err)));
     }
   }
 
   private async handleAccepted(
     msg: Extract<HostMessage, { t: 'join-accepted' }>
   ): Promise<void> {
+    const wasAccepted = this.accepted;
     this.playerId = msg.playerId;
     this.playerToken = msg.playerToken;
     this.gameId = msg.gameId;
-    writeCredentials(this.room, {
-      playerId: msg.playerId,
-      playerToken: msg.playerToken,
-      gameId: msg.gameId,
-    });
+    this.persistCredentials();
     this.rev = msg.rev;
-    await this.handlers.onSnapshot(msg.snapshot, msg.gameId);
+
+    try {
+      await this.handlers.onSnapshot(msg.snapshot, msg.gameId);
+    } catch (err) {
+      this.handlers.onError(
+        'Could not load the game into local storage. Free up space and retry.'
+      );
+      throw err;
+    }
 
     this.accepted = true;
     this.pendingApproval = false;
+    this.clearHandshakeTimer();
+    this.clearPendingAckTimer();
     this.reconnectAttempt = 0;
     this.lastPongAt = Date.now();
-    this.handlers.onJoined({ playerId: msg.playerId, gameId: msg.gameId });
+    this.deltaFailures = 0;
+    if (!wasAccepted) {
+      this.handlers.onJoined({ playerId: msg.playerId, gameId: msg.gameId });
+    }
     this.handlers.onStatus('connected');
     this.startHeartbeat();
     this.flushPending();
@@ -333,8 +452,22 @@ export class ClientSession {
       this.requestResync();
       return;
     }
-    this.rev = msg.rev;
-    await this.handlers.onDelta(msg.journal, msg.rev);
+    try {
+      // Apply before advancing rev so a failed write cannot silently skip data.
+      await this.handlers.onDelta(msg.journal, msg.rev);
+      this.rev = msg.rev;
+      this.deltaFailures = 0;
+    } catch (err) {
+      this.deltaFailures += 1;
+      console.error('Delta apply failed:', err);
+      if (this.deltaFailures >= 3) {
+        this.handlers.onError(
+          'Could not update the local game mirror. Free up space and reopen the session.'
+        );
+        this.handlers.onStatus('error');
+      }
+      this.requestResync();
+    }
   }
 
   // ---------- commands ----------
@@ -401,19 +534,21 @@ export class ClientSession {
 
   // ---------- connection recovery ----------
 
-  private handleHostBye(reason: string): void {
+  private handleHostBye(msg: Extract<HostMessage, { t: 'host-bye' }>): void {
     this.accepted = false;
     this.pendingApproval = false;
+    this.clearPendingAckTimer();
     this.stopHeartbeat();
-    const terminal = /another device|removed by the banker/i.test(reason);
-    if (terminal) {
-      this.disposed = true;
-      this.failPending(reason);
-      this.handlers.onRejected(reason);
-      this.handlers.onStatus('error');
-      this.closeResources();
+
+    if (TERMINAL_BYE_CODES.has(msg.code)) {
+      // failJoin clears the handshake/pending-ack timers, stops reconnects, and
+      // rejects any in-flight join so a terminal bye cannot be followed by a
+      // spurious JOIN_TIMEOUT later.
+      this.handlers.onRejected(msg.reason);
+      this.failJoin(new Error(msg.reason));
       return;
     }
+
     this.handlers.onStatus('reconnecting');
     this.scheduleReconnect();
   }
@@ -430,10 +565,9 @@ export class ClientSession {
   private handleTransportError(err: { type: string; message: string }): void {
     if (this.disposed) return;
     if (err.type === 'browser-incompatible') {
-      this.disposed = true;
-      this.failPending('This browser does not support the WebRTC features required to join');
-      this.handlers.onError('This browser does not support WebRTC multiplayer');
-      this.handlers.onStatus('error');
+      // Reject a pending join and clear timers instead of leaving the caller
+      // waiting for a handshake that can never complete.
+      this.failJoin(new Error('This browser does not support WebRTC multiplayer'));
       return;
     }
     this.scheduleReconnect();
@@ -467,12 +601,17 @@ export class ClientSession {
     this.sendHello();
   }
 
+  ping(): void {
+    if (this.disposed) return;
+    this.send({ t: 'ping', ts: Date.now() });
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.lastPongAt = Date.now();
     this.heartbeatTimer = setInterval(() => {
       if (!this.accepted || this.disposed) return;
-      this.send({ t: 'ping', ts: Date.now() });
+      this.ping();
       if (Date.now() - this.lastPongAt > HEARTBEAT_TIMEOUT_MS) {
         this.handleDisconnect('Host stopped responding');
       }
@@ -510,6 +649,8 @@ export class ClientSession {
   leave(): void {
     if (this.disposed) return;
     this.accepted = false;
+    this.clearHandshakeTimer();
+    this.clearPendingAckTimer();
     this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;

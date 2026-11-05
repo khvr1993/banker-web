@@ -19,10 +19,6 @@ export function configureStorage(config: { dbName: string }): void {
   activeDbName = config.dbName || DB_NAME;
 }
 
-export function activeDbNameValue(): string {
-  return activeDbName;
-}
-
 export function openDb(name: string = activeDbName): Promise<IDBDatabase> {
   const cached = dbPromises.get(name);
   if (cached) return cached;
@@ -228,17 +224,6 @@ export interface Dump {
   txns: Transaction[];
   rounds: RoundRecord[];
   audit: AuditRecord[];
-}
-
-/** Reads the full contents of the active database. */
-export async function dumpAll(): Promise<Dump> {
-  return {
-    games: await allInStore<Game>('games'),
-    players: await allInStore<Player>('players'),
-    txns: await allInStore<Transaction>('txns'),
-    rounds: await allInStore<RoundRecord>('rounds'),
-    audit: await allInStore<AuditRecord>('audit'),
-  };
 }
 
 /** Replaces every store with the provided snapshot in a single transaction. */

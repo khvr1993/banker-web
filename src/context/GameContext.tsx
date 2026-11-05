@@ -94,6 +94,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const hostRef = useRef<HostSession | null>(null);
   const clientRef = useRef<ClientSession | null>(null);
   const sessionRoleRef = useRef<SessionRole>('local');
+  const currentGameIdRef = useRef<string | null>(null);
+  const hostEpochRef = useRef(0);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const autoHostTriedRef = useRef<string | null>(null);
   const hostStartingRef = useRef(false);
@@ -186,7 +188,48 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentGameId]);
 
+  const teardownHost = useCallback(
+    (
+      options: { code?: 'host-stopped' | 'game-switched'; reason?: string } = {},
+      gameId: string | null = currentGameIdRef.current
+    ) => {
+      const session = hostRef.current;
+      hostRef.current = null;
+      session?.stop(options);
+      setCommitListener(null);
+      setRemotePeers([]);
+      setHostOnline(false);
+      setHostRev(0);
+      setRoomCode(null);
+      setJoinUrl(null);
+      setConnectionState('idle');
+      sessionRoleRef.current = 'local';
+      setSessionRole('local');
+      if (gameId) {
+        try {
+          localStorage.removeItem('banker_hosting_' + gameId);
+        } catch {
+          // ignore storage failures
+        }
+      }
+    },
+    []
+  );
+
   const loadGame = useCallback(async (gameId: string) => {
+    const previous = currentGameIdRef.current;
+    if (hostRef.current && previous && previous !== gameId) {
+      teardownHost(
+        { code: 'game-switched', reason: 'The banker opened another game' },
+        previous
+      );
+      showToast('Hosted session stopped because you opened another game', 'info');
+    } else if (sessionRoleRef.current === 'host' && !hostRef.current) {
+      // Cancel an in-flight start that would otherwise bind the old game.
+      hostEpochRef.current += 1;
+    }
+    currentGameIdRef.current = gameId;
+
     try {
       setCurrentGameId(gameId);
       localStorage.setItem('banker_last_game_id', gameId);
@@ -212,8 +255,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       showToast(err.message || 'Failed to load game', 'error');
       setGame(null);
       setCurrentGameId(null);
+      currentGameIdRef.current = null;
     }
-  }, [showToast]);
+  }, [showToast, teardownHost]);
 
   const refreshActiveGame = useCallback(async () => {
     if (!currentGameId) return;
@@ -261,16 +305,30 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     hostStartingRef.current = true;
+    const gameId = currentGameId;
+    const epoch = ++hostEpochRef.current;
     try {
       setConnectionState('connecting');
+      let publicBaseUrl: string | undefined;
+      try {
+        publicBaseUrl = localStorage.getItem('banker_public_url') || undefined;
+      } catch {
+        publicBaseUrl = undefined;
+      }
       const session = await HostSession.start({
         room: game.join_token,
-        gameId: currentGameId,
+        gameId,
+        publicBaseUrl,
         onPeersChanged: (peers) => setRemotePeers(peers),
         onJoinRequest: (peer) => showToast(`${peer.name} wants to join`, 'info', 6000),
         onError: (msg) => showToast(msg, 'error'),
         onLog: (msg) => console.info('[host]', msg),
       });
+      if (epoch !== hostEpochRef.current || currentGameIdRef.current !== gameId) {
+        session.stop({ notify: false });
+        setConnectionState('idle');
+        return;
+      }
       hostRef.current = session;
       applySessionRole('host');
       setRoomCode(session.room);
@@ -283,7 +341,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         void refreshRef.current();
       });
       try {
-        localStorage.setItem('banker_hosting_' + currentGameId, '1');
+        localStorage.setItem('banker_hosting_' + gameId, '1');
       } catch {
         // ignore storage failures
       }
@@ -301,25 +359,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [game, currentGameId, applySessionRole, showToast]);
 
   const stopHosting = useCallback(() => {
-    hostRef.current?.stop();
-    hostRef.current = null;
-    if (currentGameId) {
-      try {
-        localStorage.removeItem('banker_hosting_' + currentGameId);
-      } catch {
-        // ignore storage failures
-      }
-    }
-    setCommitListener(null);
-    applySessionRole('local');
-    setConnectionState('idle');
-    setRoomCode(null);
-    setJoinUrl(null);
-    setRemotePeers([]);
-    setHostOnline(false);
-    setHostRev(0);
+    teardownHost({
+      code: 'host-stopped',
+      reason: 'The banker ended the session',
+    });
     showToast('Hosted session stopped', 'info');
-  }, [currentGameId, applySessionRole, showToast]);
+  }, [teardownHost, showToast]);
 
   // Host reload recovery: resume hosting so reconnecting phones resync.
   useEffect(() => {
@@ -384,7 +429,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setConnectionState(state);
             setHostOnline(state === 'connected');
             if (state === 'connected') setLatencyMs(session?.latencyMs ?? 0);
+            else setLatencyMs(0);
           },
+          onLatency: (ms) => setLatencyMs(ms),
           onJoined: (info) => {
             setMyPlayerIdState(info.playerId);
             setSessionReady(true);
@@ -442,6 +489,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clientRef.current?.leave();
     clientRef.current = null;
     setClientSession(null);
+    // Keep the stored joinKey: leaving does not revoke the seat.
+    setSessionReady(false);
+    setJoinPending(false);
+    setConnectionState('idle');
+    setSessionError(null);
     window.location.assign(window.location.pathname);
   }, []);
 
@@ -468,7 +520,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Stop transports when the provider unmounts.
   useEffect(() => {
     return () => {
-      hostRef.current?.stop();
+      // A page reload/unmount is not an explicit stop: close silently so
+      // players reconnect instead of seeing a terminal bye.
+      hostRef.current?.stop({ notify: false });
       clientRef.current?.leave();
       setCommitListener(null);
     };

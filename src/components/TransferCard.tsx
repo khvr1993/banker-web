@@ -1,9 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useGame } from '../context/GameContext';
 import { formatMoney, generateIdemKey } from '../lib/constants';
 import { gameApi } from '../lib/gameApi';
 import { sound } from '../lib/sound';
 import { ACCOUNT_CATEGORIES } from '../lib/domain';
+import {
+  TransferIntent,
+  resolveTransferIntent,
+  transferFingerprint,
+} from '../lib/transferIntent';
 
 export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ targetPlayerId }) => {
   const {
@@ -18,17 +23,22 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
     refreshActiveGame,
     customDesc,
     setCustomDesc,
+    sessionRole,
+    connectionState,
   } = useGame();
 
   const isPlayerMode = appMode === 'player' && !!myPlayerId;
   const me = isPlayerMode ? players.find((p) => p.id === myPlayerId) : null;
   const curr = game?.currency || '₹';
+  const offline = sessionRole === 'client' && connectionState !== 'connected';
 
   // Form states
   const [fromAccount, setFromAccount] = useState<string>('BANK');
   const [toAccount, setToAccount] = useState<string>('BANK');
   const [category, setCategory] = useState<string>('RENT');
   const [amount, setAmount] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const intentRef = useRef<TransferIntent | null>(null);
 
   // Handle external selection shortcut (e.g. from roster)
   useEffect(() => {
@@ -122,17 +132,27 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValid || !game) return;
+    if (!isValid || !game || submitting || offline) return;
 
     const fromAcc = fromAccount === 'BANK' ? { type: 'bank', id: 'BANK' } : { type: 'player', id: fromAccount };
     const toAcc = toAccount === 'BANK' ? { type: 'bank', id: 'BANK' } : { type: 'player', id: toAccount };
     const desc = customDesc.trim() || autoDesc;
-    const idemKey = generateIdemKey('transfer');
+    const fingerprint = transferFingerprint({
+      from: `${fromAcc.type}:${fromAcc.id}`,
+      to: `${toAcc.type}:${toAcc.id}`,
+      amount: numAmount,
+      category,
+    });
+    const intent = resolveTransferIntent(intentRef.current, fingerprint, () =>
+      generateIdemKey('transfer')
+    );
+    intentRef.current = intent;
 
+    setSubmitting(true);
     try {
       await gameApi(`/games/${game.id}/transfers`, {
         method: 'POST',
-        headers: { 'Idempotency-Key': idemKey },
+        headers: { 'Idempotency-Key': intent.key },
         body: {
           from: fromAcc,
           to: toAcc,
@@ -142,13 +162,20 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
         },
       });
 
+      intentRef.current = null; // success: the next payment gets a new key
       sound.playCoin();
       showToast(`Transferred ${formatMoney(numAmount, curr)} (${category})`, 'success');
       setAmount('');
       setCustomDesc('');
       await refreshActiveGame();
     } catch (err: any) {
+      if (err?.type === 'IDEMPOTENT_CONFLICT' || err?.type === 'INVALID') {
+        intentRef.current = null;
+      }
+      // Timeouts/offline keep the intent so a manual retry reuses the key.
       showToast(err.message || 'Transfer failed', 'error');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -326,9 +353,10 @@ export const TransferCard: React.FC<{ targetPlayerId?: string | null }> = ({ tar
               type="submit"
               id="btn-submit-transfer"
               className="btn btn-emerald btn-lg btn-block"
-              disabled={!isValid}
+              disabled={!isValid || submitting || offline}
+              aria-busy={submitting}
             >
-              Post Transfer
+              {submitting ? 'Posting…' : offline ? 'Reconnecting…' : 'Post Transfer'}
             </button>
           </div>
         </form>

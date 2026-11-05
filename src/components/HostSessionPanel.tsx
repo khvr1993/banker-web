@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
+import { buildJoinUrl, isLoopbackOrigin } from '../lib/net/joinUrl';
 
 export const HostSessionPanel: React.FC = () => {
   const {
@@ -17,22 +18,38 @@ export const HostSessionPanel: React.FC = () => {
     showToast,
   } = useGame();
   const [starting, setStarting] = useState(false);
+  const [reclaiming, setReclaiming] = useState(false);
+  const [publicBase, setPublicBase] = useState(() => {
+    try {
+      return localStorage.getItem('banker_public_url') || '';
+    } catch {
+      return '';
+    }
+  });
 
   if (!game || sessionRole === 'client') return null;
 
+  const effectiveJoinUrl =
+    joinUrl && publicBase.trim() ? buildJoinUrl(roomCode || '', publicBase.trim()) : joinUrl;
+  const loopbackWarning = Boolean(joinUrl && !publicBase.trim() && isLoopbackOrigin(joinUrl));
+
   const handleStart = async () => {
     setStarting(true);
+    // PeerJS Cloud can hold the previous peer id briefly after a reload.
+    const timer = setTimeout(() => setReclaiming(true), 2500);
     try {
       await startHosting();
     } finally {
+      clearTimeout(timer);
+      setReclaiming(false);
       setStarting(false);
     }
   };
 
   const handleCopy = async () => {
-    if (!joinUrl) return;
+    if (!effectiveJoinUrl) return;
     try {
-      await navigator.clipboard.writeText(joinUrl);
+      await navigator.clipboard.writeText(effectiveJoinUrl);
       showToast('Join link copied', 'success', 1800);
     } catch {
       showToast('Copy failed — select the link manually', 'error');
@@ -56,7 +73,7 @@ export const HostSessionPanel: React.FC = () => {
             onClick={handleStart}
             disabled={starting || connectionState === 'connecting'}
           >
-            {starting ? 'Starting…' : 'Host Online Session'}
+            {reclaiming ? 'Reclaiming room…' : starting ? 'Starting…' : 'Host Online Session'}
           </button>
         </div>
       </div>
@@ -90,11 +107,52 @@ export const HostSessionPanel: React.FC = () => {
           </div>
         </div>
 
-        {joinUrl && (
-          <div className="host-join-url mono-num" id="host-join-url" title={joinUrl}>
-            {joinUrl}
+        {effectiveJoinUrl && (
+          <div className="host-join-url mono-num" id="host-join-url" title={effectiveJoinUrl}>
+            {effectiveJoinUrl}
           </div>
         )}
+
+        {loopbackWarning && (
+          <div className="join-status warning" id="host-loopback-warning">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>
+              This link points at localhost and will not open on a phone. Share the room code, open the
+              app via your computer&apos;s LAN IP, or set a public base URL below.
+            </span>
+          </div>
+        )}
+
+        <div className="host-public-url">
+          <label className="flow-label" htmlFor="host-public-base">
+            Public base URL (optional)
+          </label>
+          <div className="host-room-actions">
+            <input
+              id="host-public-base"
+              className="form-input mono-num"
+              placeholder="https://your-app.example.com"
+              value={publicBase}
+              onChange={(e) => setPublicBase(e.target.value)}
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                const clean = publicBase.trim().replace(/\/$/, '');
+                try {
+                  if (clean) localStorage.setItem('banker_public_url', clean);
+                  else localStorage.removeItem('banker_public_url');
+                } catch {
+                  // ignore storage failures
+                }
+                setPublicBase(clean);
+                showToast(clean ? 'Public join base saved' : 'Public join base cleared', 'success', 1800);
+              }}
+            >
+              Save link base
+            </button>
+          </div>
+        </div>
 
         <p className="host-hint text-xs text-muted">
           Keep this tab open and awake — the banker device must stay connected. Players join from the same

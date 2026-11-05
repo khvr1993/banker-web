@@ -63,17 +63,27 @@ export function post(bundle: GameBundle, j: Journal, p: PostParams): { txn: Tran
 
   const game = bundle.game;
   if (!game) throw fail('NOT_FOUND', 'game not found');
+
+  // Replay/conflict check before the status check: a retry may arrive after the
+  // game finished, and returning the original txn is still correct.
+  if (p.idemKey) {
+    const existing = findByIdemKey(bundle, p.gameId || game.id, p.idemKey);
+    if (existing) {
+      if (!samePosting(existing, p, game.id)) {
+        throw fail(
+          'IDEMPOTENT_CONFLICT',
+          `idempotency key ${p.idemKey} was already used for a different posting`
+        );
+      }
+      return { txn: existing, replay: true };
+    }
+  }
+
   if (game.status !== 'active') {
     throw fail(
       'INVALID_STATE',
       `game ${game.id} is "${game.status}", money movement requires an active game`
     );
-  }
-
-  // Idempotent replay: same key returns the already-posted txn unchanged.
-  if (p.idemKey) {
-    const existing = findByIdemKey(bundle, p.gameId || game.id, p.idemKey);
-    if (existing) return { txn: existing, replay: true };
   }
 
   // Counterparties must be live, non-bankrupt players.
@@ -122,6 +132,26 @@ export function post(bundle: GameBundle, j: Journal, p: PostParams): { txn: Tran
   bumpCash(bundle, j, p.to, p.amount);
 
   return { txn, replay: false };
+}
+
+function samePosting(t: Transaction, p: PostParams, gameId: string): boolean {
+  if (t.game_id !== gameId) return false;
+  if (t.txn_type !== p.txnType) return false;
+  if (t.account_category !== p.category) return false;
+  if (t.amount !== p.amount) return false;
+  if ((t.ref_txn_id || '') !== (p.refTxnId || '')) return false;
+  if (p.round !== undefined && t.round !== (p.round || 0)) return false;
+
+  const dr = t.entries.find((e) => e.direction === Dr);
+  const cr = t.entries.find((e) => e.direction === Cr);
+  return (
+    !!dr &&
+    !!cr &&
+    dr.account_type === p.from.type &&
+    dr.account_ref === accountKey(p.from) &&
+    cr.account_type === p.to.type &&
+    cr.account_ref === accountKey(p.to)
+  );
 }
 
 function bumpCash(bundle: GameBundle, j: Journal, account: Account, delta: number): void {

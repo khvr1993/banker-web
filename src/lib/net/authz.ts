@@ -43,7 +43,3 @@ export function authorizeCommand(
   }
   return deny(403, 'FORBIDDEN', 'This action is only available to the banker');
 }
-
-export function hasCommandHeaderSentinel(value: unknown): value is Record<string, string> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}

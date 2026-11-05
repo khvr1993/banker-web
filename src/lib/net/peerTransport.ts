@@ -85,10 +85,36 @@ function openOnce(id: string, handlers: TransportHandlers, options: PeerTranspor
     const peer = new Peer(id, peerOptions as any);
 
     let settled = false;
+    let abandoned = false;
+    const openTimeoutMs = options.openTimeoutMs ?? 12_000;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const clearTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const abort = (message: string) => {
+      if (settled) return;
+      settled = true;
+      abandoned = true;
+      clearTimer();
+      try {
+        peer.destroy();
+      } catch {
+        // already destroyed
+      }
+      reject(Object.assign(new Error(message), { type: 'timeout' }));
+    };
+    timer = setTimeout(
+      () => abort('Timed out contacting the signaling server'),
+      openTimeoutMs
+    );
 
     peer.on('open', (openId: string) => {
       if (settled) return;
       settled = true;
+      clearTimer();
       resolve({
         id: openId,
         connect(target: string) {
@@ -117,6 +143,7 @@ function openOnce(id: string, handlers: TransportHandlers, options: PeerTranspor
     });
 
     peer.on('disconnected', () => {
+      if (abandoned) return;
       handlers.onDisconnected?.();
       try {
         peer.reconnect();
@@ -129,6 +156,7 @@ function openOnce(id: string, handlers: TransportHandlers, options: PeerTranspor
       const info = { type: String(err?.type || 'peer-error'), message: String(err?.message || 'PeerJS error') };
       if (!settled) {
         settled = true;
+        clearTimer();
         try {
           peer.destroy();
         } catch {
@@ -137,6 +165,7 @@ function openOnce(id: string, handlers: TransportHandlers, options: PeerTranspor
         reject(Object.assign(new Error(info.message), { type: info.type }));
         return;
       }
+      if (abandoned) return;
       handlers.onError?.(info);
     });
   });
@@ -152,16 +181,26 @@ export async function createPeerTransport(
   options: PeerTransportOptions = {}
 ): Promise<Transport> {
   const retries = options.retries ?? 5;
+  const totalTimeoutMs = options.totalTimeoutMs ?? 25_000;
+  const deadline = Date.now() + totalTimeoutMs;
   let attempt = 0;
+  let lastError: any = null;
 
   for (;;) {
+    if (Date.now() >= deadline) {
+      throw lastError || Object.assign(new Error('Timed out contacting the signaling server'), {
+        type: 'timeout',
+      });
+    }
     try {
       return await openOnce(id, handlers, options);
     } catch (err: any) {
+      lastError = err;
       const type = String(err?.type || '');
       const fatal = type === 'browser-incompatible' || type === 'invalid-id' || type === 'invalid-key';
       if (fatal || attempt >= retries) throw err;
       const delay = Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
+      if (Date.now() + delay >= deadline) throw lastError;
       attempt += 1;
       await sleep(delay);
     }

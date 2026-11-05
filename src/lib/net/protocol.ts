@@ -1,8 +1,9 @@
-// Wire protocol for the host-authoritative multiplayer session (protocol v1).
+// Wire protocol for the host-authoritative multiplayer session (protocol v2).
 import type { Dump, SerializedJournal } from '../db';
+import { randomId } from '../random';
 
-export const PROTOCOL_VERSION = 1;
-export const PEER_ID_PREFIX = 'bgb-v1-';
+export const PROTOCOL_VERSION = 2;
+export const PEER_ID_PREFIX = `bgb-v${PROTOCOL_VERSION}-`;
 export const MAX_MESSAGE_BYTES = 12 * 1024;
 export const MAX_MESSAGE_CHARS = 512 * 1024;
 
@@ -31,6 +32,7 @@ export interface HelloMessage {
   t: 'hello';
   protocol: number;
   room: string;
+  joinKey?: string;
   playerToken?: string;
   playerId?: string;
 }
@@ -38,6 +40,7 @@ export interface HelloMessage {
 export interface JoinRequestMessage {
   t: 'join-request';
   name: string;
+  joinKey?: string;
   playerToken?: string;
   playerId?: string;
 }
@@ -70,13 +73,14 @@ export type ClientMessage =
 
 // ---------- host -> client ----------
 
+/**
+ * Capability probe only. The ledger snapshot is sent in `join-accepted` after
+ * the banker approves (or a valid rejoin token is presented).
+ */
 export interface WelcomeMessage {
   t: 'welcome';
   protocol: number;
   room: string;
-  gameId: string;
-  rev: number;
-  snapshot: Dump;
 }
 
 export interface JoinPendingMessage {
@@ -131,8 +135,15 @@ export interface PongMessage {
   ts: number;
 }
 
+export type HostByeCode =
+  | 'host-stopped'
+  | 'game-switched'
+  | 'removed'
+  | 'seat-replaced';
+
 export interface HostByeMessage {
   t: 'host-bye';
+  code: HostByeCode;
   reason: string;
 }
 
@@ -208,8 +219,8 @@ export function hostPeerId(room: string): string {
 }
 
 /**
- * Accepts a raw token, `bgb-v1-<token>`, a `?join=<token>` URL, or a full URL
- * and returns the sanitized join token.
+ * Accepts a raw token, a `bgb-v<N>-<token>` peer id, a `?join=<token>` URL, or
+ * a full URL and returns the sanitized join token.
  */
 export function normalizeRoom(input: string): string {
   let value = String(input || '').trim();
@@ -225,22 +236,16 @@ export function normalizeRoom(input: string): string {
       if (match) value = decodeURIComponent(match[1]);
     }
   }
-  if (value.startsWith(PEER_ID_PREFIX)) value = value.slice(PEER_ID_PREFIX.length);
+  value = value.replace(/^bgb-v\d+-/, '');
   const parts = value.split('/').filter(Boolean);
   if (parts.length > 0) value = parts[parts.length - 1];
   return sanitizeRoom(value);
 }
 
-export function roomPeerIdFor(room: string): string {
-  return hostPeerId(room);
-}
-
 export function newClientPeerId(): string {
-  const rand = Math.random().toString(36).slice(2, 10);
-  const stamp = Date.now().toString(36);
-  return `pl-${stamp}${rand}`;
+  return randomId('pl', 8);
 }
 
 export function newMessageId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return randomId('m', 8);
 }

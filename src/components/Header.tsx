@@ -14,6 +14,7 @@ export const Header: React.FC = () => {
     toggleTheme,
     openModal,
     sessionRole,
+    leaveSession,
   } = useGame();
 
   const isPlayerMode = appMode === 'player';
@@ -38,6 +39,21 @@ export const Header: React.FC = () => {
         {/* Workspace Navigation & Actions */}
         <div className="nav-actions">
           <ConnectionPill />
+
+          {isClient && (
+            <button
+              id="btn-leave-session"
+              className="btn btn-ghost btn-sm"
+              title="Leave the hosted table and return to local mode"
+              onClick={() => {
+                if (window.confirm('Leave the hosted table? The banker can re-admit you later.')) {
+                  leaveSession();
+                }
+              }}
+            >
+              Leave
+            </button>
+          )}
 
           {canUseBankerTools && (
           <button

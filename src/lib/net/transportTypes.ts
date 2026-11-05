@@ -31,4 +31,8 @@ export interface PeerTransportOptions {
   key?: string;
   secure?: boolean;
   iceServers?: RTCIceServer[];
+  /** Per-attempt bound for reaching the signaling server. */
+  openTimeoutMs?: number;
+  /** Overall bound across all registration retries. */
+  totalTimeoutMs?: number;
 }

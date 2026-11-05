@@ -1,18 +1,35 @@
 // Host session: owns the PeerJS peer, approves players, authorizes commands,
 // and broadcasts committed journal deltas. The host is the only writer.
-import { Dump, Journal, SerializedJournal, journalToSerialized, loadGame } from '../db';
+import { Dump, GameBundle, Journal, SerializedJournal, journalToSerialized, loadGame } from '../db';
 import { localApi } from '../api';
 import { validName } from '../service';
-import { ChunkAssembler, sendMessage } from './codec';
+import {
+  ChunkAssembler,
+  MAX_ASSEMBLER_BYTES,
+  byteLength,
+  encodeMessage,
+  sendMessage,
+} from './codec';
 import { createTransport } from './peerFactory';
 import { Transport, TransportConnection } from './transportTypes';
 import { authorizeCommand, gameIdFromPath } from './authz';
+import { clientIdempotencyKey, playerIdempotencyKey } from './idempotency';
+import { sanitizeJoinKey } from './joinKey';
+import {
+  HostCredentialStore,
+  JoinReservation,
+  createHostCredentialStore,
+} from './hostCredentials';
+import { buildJoinUrl } from './joinUrl';
+import { randomId } from '../random';
 import {
   ClientMessage,
   CmdMessage,
+  HostByeCode,
   HostMessage,
   RemoteEvent,
   PROTOCOL_VERSION,
+  MAX_MESSAGE_CHARS,
   hostPeerId,
   isClientMessage,
   parseIncoming,
@@ -21,6 +38,14 @@ import {
 
 const MAX_COMMANDS_PER_SECOND = 10;
 const MAX_SEATS = 12;
+const MAX_CONNECTIONS = 32;
+const MAX_PENDING_CONNECTIONS = 8;
+const HELLO_TIMEOUT_MS = 15_000;
+const MAX_INBOUND_MESSAGES_PER_SECOND = 50;
+// Pending join requests are cheap but persisted; expire and cap them so an
+// abandoning or hostile peer cannot grow the credential store without bound.
+const PENDING_RESERVATION_TTL_MS = 10 * 60_000;
+const MAX_PENDING_RESERVATIONS = 16;
 
 export interface RemotePeerInfo {
   sessionId: string;
@@ -30,6 +55,11 @@ export interface RemotePeerInfo {
   connected: boolean;
 }
 
+export interface HostSessionHooks {
+  /** Test seam: runs before the join snapshot is read. */
+  beforeAcceptSnapshot?: () => Promise<void>;
+}
+
 export interface HostSessionOptions {
   room: string;
   gameId: string;
@@ -37,6 +67,10 @@ export interface HostSessionOptions {
   onJoinRequest?: (peer: RemotePeerInfo) => void;
   onError?: (message: string) => void;
   onLog?: (message: string) => void;
+  publicBaseUrl?: string;
+  helloTimeoutMs?: number;
+  credentialStore?: HostCredentialStore;
+  hooks?: HostSessionHooks;
 }
 
 interface PeerRecord {
@@ -44,17 +78,23 @@ interface PeerRecord {
   conn: TransportConnection;
   name: string;
   playerId: string | null;
+  joinKey: string;
   accepted: boolean;
   accepting: boolean;
+  joining: boolean;
+  joinBuffer: HostMessage[];
   helloDone: boolean;
   cmdTimes: number[];
+  inboundTimes: number[];
   assembler: ChunkAssembler;
+  helloTimer: ReturnType<typeof setTimeout> | null;
   closed: boolean;
 }
 
-export function buildJoinUrl(room: string): string {
-  const { origin, pathname } = window.location;
-  return `${origin}${pathname}?join=${encodeURIComponent(sanitizeRoom(room))}`;
+interface StopOptions {
+  reason?: string;
+  code?: HostByeCode;
+  notify?: boolean;
 }
 
 export function filterJournalForGame(j: SerializedJournal, gameId: string): SerializedJournal {
@@ -81,35 +121,58 @@ export function isEmptySerializedJournal(j: SerializedJournal): boolean {
 
 /** Builds toast/sound events from the transactions in one delta. */
 export function eventsForJournal(j: SerializedJournal): RemoteEvent[] {
+  return eventsWithOrigins(j, new Map()).map((item) => item.event);
+}
+
+export interface OriginatedEvent {
+  event: RemoteEvent;
+  origin: string | undefined;
+}
+
+/** Attributes each event to the session whose command produced it. */
+export function eventsWithOrigins(
+  j: SerializedJournal,
+  origins: Map<string, string>
+): OriginatedEvent[] {
   if (j.rounds.length > 0) {
-    return [{ kind: 'round', round: j.rounds[0].round_no }];
+    let origin: string | undefined;
+    for (const t of j.txns) {
+      if (!t.idempotency_key) continue;
+      const found = origins.get(t.idempotency_key);
+      if (found) {
+        origin = found;
+        break;
+      }
+    }
+    return [{ event: { kind: 'round', round: j.rounds[0].round_no }, origin }];
   }
-  const events: RemoteEvent[] = [];
+
+  const events: OriginatedEvent[] = [];
   const seen = new Set<string>();
   for (const t of j.txns) {
+    const origin = t.idempotency_key ? origins.get(t.idempotency_key) : undefined;
     const kind: RemoteEvent['kind'] =
       t.txn_type === 'VOID' ? 'void' : t.account_category === 'ROUND_COMPLETE' ? 'round' : 'transfer';
-    const key = `${kind}:${t.account_category}:${t.amount}:${t.description}`;
+    const key = `${origin ?? ''}:${kind}:${t.account_category}:${t.amount}:${t.description}`;
     if (seen.has(key)) continue;
     seen.add(key);
     events.push({
-      kind,
-      amount: t.amount,
-      category: t.account_category,
-      description: t.description,
-      round: t.round,
+      event: {
+        kind,
+        amount: t.amount,
+        category: t.account_category,
+        description: t.description,
+        round: t.round,
+      },
+      origin,
     });
     if (events.length >= 5) break;
   }
   return events;
 }
 
-function tokenStoreKey(gameId: string): string {
-  return `banker_tokens_${gameId}`;
-}
-
 function newPlayerToken(): string {
-  return `pt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return randomId('pt', 16);
 }
 
 export class HostSession {
@@ -120,30 +183,38 @@ export class HostSession {
   private transport: Transport | null = null;
   private connections = new Map<string, PeerRecord>();
   private tokens = new Map<string, string>();
+  private reservations = new Map<string, JoinReservation>();
+  private credentialStore: HostCredentialStore;
+  private approvingJoinKeys = new Set<string>();
+  private notifiedJoinKeys = new Set<string>();
+  private commandOrigins = new Map<string, string>();
   private rev = 0;
-  private counter = 0;
   private stopped = false;
-  private suppressEventsFor: string | null = null;
 
   private constructor(room: string, gameId: string, options: HostSessionOptions) {
     this.room = sanitizeRoom(room);
     this.gameId = gameId;
     this.options = options;
+    this.credentialStore = options.credentialStore || createHostCredentialStore();
   }
 
   static async start(options: HostSessionOptions): Promise<HostSession> {
     const session = new HostSession(options.room, options.gameId, options);
-    session.loadTokens();
-    session.transport = await createTransport(hostPeerId(session.room), {
-      onConnection: (conn) => session.handleConnection(conn),
-      onError: (err) => session.options.onError?.(`Signaling error: ${err.message}`),
-      onDisconnected: () => session.options.onLog?.('Signaling disconnected, retrying…'),
-    });
+    await session.loadCredentials();
+    session.transport = await createTransport(
+      hostPeerId(session.room),
+      {
+        onConnection: (conn) => session.handleConnection(conn),
+        onError: (err) => session.options.onError?.(`Signaling error: ${err.message}`),
+        onDisconnected: () => session.options.onLog?.('Signaling disconnected, retrying…'),
+      },
+      { openTimeoutMs: 12_000, totalTimeoutMs: 25_000 }
+    );
     return session;
   }
 
   get joinUrl(): string {
-    return buildJoinUrl(this.room);
+    return buildJoinUrl(this.room, this.options.publicBaseUrl);
   }
 
   get hostRev(): number {
@@ -151,15 +222,23 @@ export class HostSession {
   }
 
   get peers(): RemotePeerInfo[] {
-    return [...this.connections.values()]
-      .filter((r) => r.helloDone && !r.closed)
-      .map((r) => ({
+    const out: RemotePeerInfo[] = [];
+    const seenJoinKeys = new Set<string>();
+    for (const r of this.connections.values()) {
+      if (!r.helloDone || r.closed) continue;
+      if (!r.accepted && r.joinKey) {
+        if (seenJoinKeys.has(r.joinKey)) continue;
+        seenJoinKeys.add(r.joinKey);
+      }
+      out.push({
         sessionId: r.sessionId,
         name: r.name || 'Guest',
         playerId: r.playerId,
         status: r.accepted ? 'connected' : 'pending',
         connected: r.accepted,
-      }));
+      });
+    }
+    return out;
   }
 
   get acceptedPeerCount(): number {
@@ -170,8 +249,21 @@ export class HostSession {
   async approve(sessionId: string): Promise<void> {
     const record = this.connections.get(sessionId);
     if (!record || record.accepted || record.accepting) return;
+    const joinKey = record.joinKey;
+    if (!joinKey) {
+      this.reject(record, 'Reload the app to reconnect.');
+      return;
+    }
+    if (this.approvingJoinKeys.has(joinKey)) return;
     record.accepting = true;
+    this.approvingJoinKeys.add(joinKey);
     try {
+      const existing = this.reservations.get(joinKey);
+      if (existing?.status === 'seated' && existing.playerId) {
+        await this.accept(record, existing.playerId, existing.playerToken);
+        return;
+      }
+
       const name = record.name || 'Player';
       const seated = await localApi(`/games/${this.gameId}/players`, {
         method: 'POST',
@@ -181,9 +273,20 @@ export class HostSession {
       if (!playerId) throw new Error('Could not seat the player on the host');
       const token = newPlayerToken();
       this.tokens.set(playerId, token);
-      this.persistTokens();
+      this.reservations.set(joinKey, {
+        joinKey,
+        playerId,
+        playerToken: token,
+        name,
+        gameId: this.gameId,
+        status: 'seated',
+        createdAt: Date.now(),
+      });
+      // Durable before the ack: a lost join-accepted must still recover the seat.
+      await this.saveCredentials();
       await this.accept(record, playerId, token);
     } finally {
+      this.approvingJoinKeys.delete(joinKey);
       record.accepting = false;
     }
   }
@@ -191,6 +294,15 @@ export class HostSession {
   deny(sessionId: string, reason = 'Join request denied by the banker'): void {
     const record = this.connections.get(sessionId);
     if (!record) return;
+    if (record.joinKey) {
+      const reservation = this.reservations.get(record.joinKey);
+      if (reservation?.status === 'pending') {
+        this.reservations.delete(record.joinKey);
+        void this.saveCredentials();
+      }
+      // Let a future rejoin notify the banker again.
+      this.notifiedJoinKeys.delete(record.joinKey);
+    }
     this.send(record, { t: 'join-rejected', reason });
     this.closeSoon(record);
   }
@@ -200,27 +312,47 @@ export class HostSession {
     if (!record) return;
     if (record.playerId) {
       this.tokens.delete(record.playerId);
-      this.persistTokens();
+      for (const [key, res] of this.reservations) {
+        if (res.playerId === record.playerId) {
+          this.reservations.delete(key);
+          this.notifiedJoinKeys.delete(key);
+        }
+      }
+      void this.saveCredentials();
     }
-    this.send(record, { t: 'host-bye', reason: 'Removed by the banker' });
+    if (record.joinKey) this.notifiedJoinKeys.delete(record.joinKey);
+    this.send(record, { t: 'host-bye', code: 'removed', reason: 'Removed by the banker' });
     this.closeSoon(record);
   }
 
-  stop(reason = 'Host ended the session'): void {
+  stop(options: StopOptions = {}): void {
     if (this.stopped) return;
     this.stopped = true;
+    const {
+      notify = true,
+      code = 'host-stopped',
+      reason = 'The banker ended the session',
+    } = options;
+
+    void this.saveCredentials();
+
     for (const record of this.connections.values()) {
-      this.send(record, { t: 'host-bye', reason });
-      record.conn.close();
+      if (notify) this.send(record, { t: 'host-bye', code, reason });
+      else record.conn.close();
     }
-    this.connections.clear();
-    try {
-      this.transport?.destroy();
-    } catch {
-      // ignore
-    }
-    this.transport = null;
-    this.emitPeers();
+    const finish = () => {
+      for (const record of this.connections.values()) record.conn.close();
+      this.connections.clear();
+      try {
+        this.transport?.destroy();
+      } catch {
+        // ignore
+      }
+      this.transport = null;
+      this.emitPeers();
+    };
+    if (notify) setTimeout(finish, 150);
+    else finish();
   }
 
   /** Called by the host commit listener; returns the delta revision sent. */
@@ -230,19 +362,26 @@ export class HostSession {
     if (isEmptySerializedJournal(filtered)) return;
     this.rev += 1;
     const delta: HostMessage = { t: 'delta', rev: this.rev, journal: filtered };
+    const originated = eventsWithOrigins(filtered, this.commandOrigins);
+
     for (const record of this.connections.values()) {
-      if (!record.accepted || record.closed) continue;
-      this.send(record, delta);
-      if (this.suppressEventsFor !== record.sessionId) {
-        for (const event of eventsForJournal(filtered)) {
-          this.send(record, { t: 'event', event });
+      if (record.closed) continue;
+      const messages: HostMessage[] = [delta];
+      for (const item of originated) {
+        if (item.origin !== record.sessionId) {
+          messages.push({ t: 'event', event: item.event });
         }
+      }
+      if (record.joining) {
+        // A joining or resyncing peer must receive its baseline before deltas.
+        record.joinBuffer.push(...messages);
+      } else if (record.accepted) {
+        for (const message of messages) this.send(record, message);
       }
     }
   }
 
-  private async snapshot(): Promise<Dump> {
-    const bundle = await loadGame(this.gameId);
+  private snapshotFromBundle(bundle: GameBundle): Dump {
     return {
       games: bundle.game ? [bundle.game] : [],
       players: bundle.players,
@@ -252,67 +391,131 @@ export class HostSession {
     };
   }
 
-  private async welcomeMessage(): Promise<HostMessage> {
-    return {
-      t: 'welcome',
-      protocol: PROTOCOL_VERSION,
-      room: this.room,
-      gameId: this.gameId,
-      rev: this.rev,
-      snapshot: await this.snapshot(),
-    };
+  private welcomeMessage(): HostMessage {
+    return { t: 'welcome', protocol: PROTOCOL_VERSION, room: this.room };
   }
 
-  private loadTokens(): void {
+  // ---------- credential persistence ----------
+
+  private async loadCredentials(): Promise<void> {
     try {
-      const raw = localStorage.getItem(tokenStoreKey(this.gameId));
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        for (const [pid, token] of Object.entries(parsed)) {
-          if (typeof pid === 'string' && typeof token === 'string') this.tokens.set(pid, token);
-        }
+      const snapshot = await this.credentialStore.load(this.gameId);
+      if (!snapshot) return;
+      for (const [pid, token] of Object.entries(snapshot.tokens)) {
+        this.tokens.set(pid, token);
       }
-    } catch {
-      // Corrupt token map is not fatal; players can rejoin via approval.
+      for (const res of snapshot.reservations) {
+        this.reservations.set(res.joinKey, res);
+      }
+      this.pruneReservations();
+    } catch (err) {
+      this.options.onLog?.(`Could not load seat credentials: ${String(err)}`);
     }
   }
 
-  private persistTokens(): void {
+  private async saveCredentials(): Promise<void> {
+    this.pruneReservations();
+    const tokens: Record<string, string> = {};
+    for (const [pid, token] of this.tokens) tokens[pid] = token;
     try {
-      const data: Record<string, string> = {};
-      for (const [pid, token] of this.tokens) data[pid] = token;
-      localStorage.setItem(tokenStoreKey(this.gameId), JSON.stringify(data));
-    } catch {
-      // localStorage may be unavailable in private browsing.
+      await this.credentialStore.save(this.gameId, {
+        reservations: [...this.reservations.values()],
+        tokens,
+      });
+    } catch (err) {
+      this.options.onLog?.(`Could not save seat credentials: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Drops expired pending reservations and caps how many can be persisted.
+   * Seated reservations never expire: they are the durable rejoin credential.
+   */
+  private pruneReservations(now = Date.now()): void {
+    for (const [key, res] of [...this.reservations.entries()]) {
+      if (res.status !== 'pending') continue;
+      if (now - (Number(res.createdAt) || 0) <= PENDING_RESERVATION_TTL_MS) continue;
+      this.reservations.delete(key);
+      this.notifiedJoinKeys.delete(key);
+    }
+
+    const pending = [...this.reservations.entries()]
+      .filter(([, res]) => res.status === 'pending')
+      .sort((a, b) => (Number(a[1].createdAt) || 0) - (Number(b[1].createdAt) || 0));
+    while (pending.length > MAX_PENDING_RESERVATIONS) {
+      const [key] = pending.shift()!;
+      this.reservations.delete(key);
+      this.notifiedJoinKeys.delete(key);
     }
   }
 
   // ---------- connection lifecycle ----------
 
   private handleConnection(conn: TransportConnection): void {
-    const sessionId = `peer-${++this.counter}-${Math.random().toString(36).slice(2, 6)}`;
+    if (this.stopped) {
+      conn.close();
+      return;
+    }
+
+    const pending = [...this.connections.values()].filter((r) => !r.accepted && !r.closed).length;
+    if (this.connections.size >= MAX_CONNECTIONS || pending >= MAX_PENDING_CONNECTIONS) {
+      sendMessage(conn, {
+        t: 'join-rejected',
+        reason: 'The table is busy. Wait a moment and try again.',
+      });
+      setTimeout(() => conn.close(), 150);
+      return;
+    }
+
     const record: PeerRecord = {
-      sessionId,
+      sessionId: randomId('peer', 6),
       conn,
       name: '',
       playerId: null,
+      joinKey: '',
       accepted: false,
       accepting: false,
+      joining: false,
+      joinBuffer: [],
       helloDone: false,
       cmdTimes: [],
+      inboundTimes: [],
       assembler: new ChunkAssembler(),
+      helloTimer: null,
       closed: false,
     };
-    this.connections.set(sessionId, record);
+    record.helloTimer = setTimeout(() => {
+      record.helloTimer = null;
+      record.conn.close();
+    }, this.options.helloTimeoutMs ?? HELLO_TIMEOUT_MS);
+    this.connections.set(record.sessionId, record);
     conn.onData((raw) => this.handleRaw(record, raw));
     conn.onClose(() => this.dropRecord(record));
   }
 
   private dropRecord(record: PeerRecord): void {
+    if (record.closed) return;
     record.closed = true;
+    this.clearHelloTimer(record);
     record.assembler.reset();
     this.connections.delete(record.sessionId);
+
+    const joinKey = record.joinKey;
+    if (joinKey) {
+      const stillConnected = [...this.connections.values()].some(
+        (r) => !r.closed && r.joinKey === joinKey
+      );
+      if (!stillConnected) {
+        // A dropped pending request must be forgotten so a rejoin notifies the
+        // banker again and cannot leave a stale reservation behind.
+        this.notifiedJoinKeys.delete(joinKey);
+        const reservation = this.reservations.get(joinKey);
+        if (reservation?.status === 'pending') {
+          this.reservations.delete(joinKey);
+          void this.saveCredentials();
+        }
+      }
+    }
     this.emitPeers();
   }
 
@@ -334,11 +537,23 @@ export class HostSession {
     setTimeout(() => record.conn.close(), 150);
   }
 
+  private allowInbound(record: PeerRecord): boolean {
+    const now = Date.now();
+    record.inboundTimes = record.inboundTimes.filter((t) => now - t < 1000);
+    if (record.inboundTimes.length >= MAX_INBOUND_MESSAGES_PER_SECOND) {
+      record.conn.close();
+      return false;
+    }
+    record.inboundTimes.push(now);
+    return true;
+  }
+
   private handleRaw(record: PeerRecord, raw: unknown): void {
-    if (typeof raw === 'string' && raw.length > 512 * 1024) {
+    if (typeof raw === 'string' && raw.length > MAX_MESSAGE_CHARS) {
       record.conn.close();
       return;
     }
+    if (!this.allowInbound(record)) return;
     let msg = parseIncoming(raw);
     if (!msg || typeof msg !== 'object') return;
     if ((msg as any).t === 'chunk') {
@@ -372,6 +587,18 @@ export class HostSession {
     }
   }
 
+  private clearHelloTimer(record: PeerRecord): void {
+    if (record.helloTimer) clearTimeout(record.helloTimer);
+    record.helloTimer = null;
+  }
+
+  private markHelloDone(record: PeerRecord): void {
+    // Do not clear the timer here: a peer that sends only `hello` and never a
+    // join request must still be reaped. The timer is cleared when the join
+    // handshake actually completes (join-request or accept).
+    record.helloDone = true;
+  }
+
   private async handleHello(
     record: PeerRecord,
     msg: Extract<ClientMessage, { t: 'hello' }>
@@ -384,28 +611,64 @@ export class HostSession {
       this.reject(record, 'Unknown room code');
       return;
     }
-    record.helloDone = true;
-    if (await this.verifyRejoin(msg.playerId, msg.playerToken)) {
+    record.joinKey = sanitizeJoinKey(msg.joinKey);
+    this.markHelloDone(record);
+
+    if (await this.verifyRejoin(msg.playerId, msg.playerToken, record.joinKey)) {
       await this.accept(record, msg.playerId as string, msg.playerToken as string);
       return;
     }
-    this.send(record, await this.welcomeMessage());
+
+    const seated = record.joinKey ? this.reservations.get(record.joinKey) : undefined;
+    if (seated?.status === 'seated' && seated.playerId) {
+      await this.accept(record, seated.playerId, seated.playerToken);
+      return;
+    }
+
+    this.send(record, this.welcomeMessage());
   }
 
   private async handleJoinRequest(
     record: PeerRecord,
     msg: Extract<ClientMessage, { t: 'join-request' }>
   ): Promise<void> {
-    if (record.accepted) return;
     const name = String(msg.name || '').trim();
     if (!validName(name)) {
       this.reject(record, 'Please choose a name between 1 and 64 characters');
       return;
     }
-    record.name = name;
+    const joinKey = sanitizeJoinKey(msg.joinKey);
+    if (!joinKey) {
+      this.reject(record, 'Reload the app to reconnect.');
+      return;
+    }
 
-    if (await this.verifyRejoin(msg.playerId, msg.playerToken)) {
+    if (record.accepted) {
+      // An accepted peer reaches this path only when a resync `hello` could not
+      // be verified. Revalidate, otherwise reject explicitly instead of leaving
+      // the client waiting on an ack that will never arrive.
+      if (await this.verifyRejoin(msg.playerId, msg.playerToken, joinKey)) {
+        await this.accept(record, msg.playerId as string, msg.playerToken as string);
+      } else {
+        this.reject(record, 'This seat is no longer available. Ask the banker to re-admit you.');
+      }
+      return;
+    }
+
+    record.name = name;
+    record.joinKey = joinKey;
+    this.markHelloDone(record);
+    // The peer has completed the handshake; the 15s reaper no longer applies.
+    this.clearHelloTimer(record);
+
+    if (await this.verifyRejoin(msg.playerId, msg.playerToken, joinKey)) {
       await this.accept(record, msg.playerId as string, msg.playerToken as string);
+      return;
+    }
+
+    const seated = this.reservations.get(joinKey);
+    if (seated?.status === 'seated' && seated.playerId) {
+      await this.accept(record, seated.playerId, seated.playerToken);
       return;
     }
 
@@ -418,53 +681,137 @@ export class HostSession {
       this.reject(record, 'This game has already started. Only existing seats can reconnect.');
       return;
     }
-    if (bundle.players.length >= MAX_SEATS) {
+    if (!seated && bundle.players.length >= MAX_SEATS) {
       this.reject(record, 'This table is full');
       return;
     }
 
-    record.helloDone = true;
+    this.reservations.set(joinKey, {
+      joinKey,
+      playerId: null,
+      playerToken: '',
+      name,
+      gameId: this.gameId,
+      status: 'pending',
+      createdAt: Date.now(),
+    });
+    void this.saveCredentials();
+
     this.send(record, { t: 'join-pending' });
     this.emitPeers();
-    const info = this.peers.find((p) => p.sessionId === record.sessionId);
-    if (info) this.options.onJoinRequest?.(info);
-  }
-
-  private async verifyRejoin(playerId?: string, token?: string): Promise<boolean> {
-    if (!playerId || !token) return false;
-    if (this.tokens.get(playerId) !== token) return false;
-    const bundle = await loadGame(this.gameId);
-    return bundle.players.some((p) => p.id === playerId);
-  }
-
-  private async accept(record: PeerRecord, playerId: string, token: string): Promise<void> {
-    for (const other of this.connections.values()) {
-      if (other.sessionId === record.sessionId || !other.accepted) continue;
-      if (other.playerId === playerId) {
-        this.send(other, { t: 'host-bye', reason: 'This seat opened on another device' });
-        other.conn.close();
-      }
+    if (!this.notifiedJoinKeys.has(joinKey)) {
+      this.notifiedJoinKeys.add(joinKey);
+      const info = this.peers.find((p) => p.sessionId === record.sessionId);
+      if (info) this.options.onJoinRequest?.(info);
     }
+  }
+
+  private async verifyRejoin(
+    playerId?: string,
+    token?: string,
+    joinKey?: string
+  ): Promise<boolean> {
+    if (!playerId || !token) return false;
+    const known =
+      this.tokens.get(playerId) === token ||
+      [...this.reservations.values()].some(
+        (r) => r.playerId === playerId && r.playerToken === token && r.status === 'seated'
+      );
+    if (!known) return false;
 
     const bundle = await loadGame(this.gameId);
     const player = bundle.players.find((p) => p.id === playerId);
-    if (!player) {
-      this.reject(record, 'Seat not found on this game');
-      return;
-    }
+    if (!player) return false;
 
-    record.accepted = true;
-    record.playerId = playerId;
-    record.name = player.name;
-    this.send(record, {
-      t: 'join-accepted',
-      playerId,
-      playerToken: token,
-      gameId: this.gameId,
-      rev: this.rev,
-      snapshot: await this.snapshot(),
-    });
-    this.emitPeers();
+    if (joinKey) {
+      const bound = this.reservations.get(joinKey);
+      if (bound && bound.playerId && bound.playerId !== playerId) return false;
+      if (!bound) {
+        this.reservations.set(joinKey, {
+          joinKey,
+          playerId,
+          playerToken: token,
+          name: player.name,
+          gameId: this.gameId,
+          status: 'seated',
+          createdAt: Date.now(),
+        });
+        void this.saveCredentials();
+      }
+    }
+    return true;
+  }
+
+  private async accept(record: PeerRecord, playerId: string, token: string): Promise<void> {
+    if (record.accepted && record.playerId !== playerId) return;
+    // A successful accept also completes the join handshake.
+    this.clearHelloTimer(record);
+
+    record.joining = true;
+    record.joinBuffer = [];
+    const revAt = this.rev;
+    let completed = false;
+
+    try {
+      if (this.options.hooks?.beforeAcceptSnapshot) {
+        await this.options.hooks.beforeAcceptSnapshot();
+      }
+      const bundle = await loadGame(this.gameId);
+      const player = bundle.players.find((p) => p.id === playerId);
+      if (!player) {
+        this.reject(record, 'Seat not found on this game');
+        return;
+      }
+
+      const accepted: HostMessage = {
+        t: 'join-accepted',
+        playerId,
+        playerToken: token,
+        gameId: this.gameId,
+        rev: revAt,
+        snapshot: this.snapshotFromBundle(bundle),
+      };
+      if (byteLength(encodeMessage(accepted)) > MAX_ASSEMBLER_BYTES) {
+        this.reject(record, 'Game history too large to sync. Start a new game.');
+        return;
+      }
+
+      // Displace any other device holding this seat only after the new join has
+      // been fully validated, so a failed resync cannot evict a working seat.
+      if (!record.accepted) {
+        for (const other of this.connections.values()) {
+          if (other.sessionId === record.sessionId || !other.accepted) continue;
+          if (other.playerId !== playerId) continue;
+          this.send(other, {
+            t: 'host-bye',
+            code: 'seat-replaced',
+            reason: 'This seat opened on another device',
+          });
+          this.closeSoon(other);
+        }
+      }
+
+      // No await between here and sending the ack: a concurrent commit cannot
+      // overtake the join-accepted that establishes its baseline.
+      record.accepted = true;
+      record.playerId = playerId;
+      record.name = player.name;
+      record.joining = false;
+      const buffered = record.joinBuffer;
+      record.joinBuffer = [];
+      this.send(record, accepted);
+      for (const message of buffered) this.send(record, message);
+      completed = true;
+      this.emitPeers();
+    } finally {
+      if (!completed) {
+        record.joining = false;
+        record.joinBuffer = [];
+        // A peer that failed to resync must not keep receiving deltas against a
+        // stale mirror after its replacement was rejected/closed.
+        record.accepted = false;
+      }
+    }
   }
 
   // ---------- commands ----------
@@ -516,15 +863,23 @@ export class HostSession {
       return;
     }
 
-    const headers: Record<string, string> = { ...(msg.headers || {}) };
-    if (!headers['Idempotency-Key'] && !headers['idempotency-key']) {
-      headers['Idempotency-Key'] = msg.id;
-    }
+    // Whitelist: the local API only understands Idempotency-Key, and player keys
+    // must never collide with host-generated keys.
+    const key = playerIdempotencyKey(
+      record.playerId,
+      clientIdempotencyKey(msg.headers, msg.id)
+    );
 
-    // The sender already shows its own toast/sound on ack.
-    this.suppressEventsFor = record.sessionId;
+    // The commit listener runs synchronously before localApi resolves, so the
+    // origin map is populated when the delta is broadcast.
+    this.commandOrigins.set(key, record.sessionId);
     try {
-      const result = await localApi(path, { method, body: msg.body, headers });
+      const result = await localApi(path, {
+        method,
+        body: msg.body,
+        headers: { 'Idempotency-Key': key },
+        actor: `player:${record.playerId}`,
+      });
       this.send(record, { t: 'ack', id: msg.id, result: result ?? null });
     } catch (err: any) {
       this.send(record, {
@@ -537,7 +892,7 @@ export class HostSession {
         },
       });
     } finally {
-      this.suppressEventsFor = null;
+      this.commandOrigins.delete(key);
     }
   }
 }

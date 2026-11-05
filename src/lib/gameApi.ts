@@ -8,14 +8,6 @@ export function setClientSession(session: ClientSession | null): void {
   clientSession = session;
 }
 
-export function getClientSession(): ClientSession | null {
-  return clientSession;
-}
-
-export function isClientMode(): boolean {
-  return clientSession !== null;
-}
-
 /** Clients may only post transfers; everything else stays banker-only. */
 export function isClientWritable(path: string, method: string): boolean {
   if (String(method || 'GET').toUpperCase() !== 'POST') return false;

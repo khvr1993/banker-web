@@ -112,7 +112,13 @@ export function createGame(input?: CreateGameInput): Game {
   };
 }
 
-export function patchGame(bundle: GameBundle, j: Journal, gid: string, salary: number | null): GameViewResult {
+export function patchGame(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  salary: number | null,
+  actor = 'banker'
+): GameViewResult {
   const g = bundle.game;
   if (!g) throw fail('NOT_FOUND', 'game not found');
   if (g.status === GAME_STATUS.FINISHED) {
@@ -124,12 +130,12 @@ export function patchGame(bundle: GameBundle, j: Journal, gid: string, salary: n
     }
     g.salary_per_round = Number(salary);
     j.games.push(g);
-    audit(j, bundle, gid, 'salary.update', `salary_per_round=${Number(salary)}`);
+    audit(j, bundle, gid, 'salary.update', `salary_per_round=${Number(salary)}`, actor);
   }
   return gameView(bundle);
 }
 
-export function startGame(bundle: GameBundle, j: Journal): GameViewResult {
+export function startGame(bundle: GameBundle, j: Journal, actor = 'banker'): GameViewResult {
   const g = bundle.game;
   if (!g) throw fail('NOT_FOUND', 'game not found');
   if (g.status !== GAME_STATUS.PENDING) {
@@ -172,11 +178,11 @@ export function startGame(bundle: GameBundle, j: Journal): GameViewResult {
       idemKey: `start:${g.id}:${p.id}`,
     });
   }
-  audit(j, bundle, g.id, 'game.start', `${players.length} players x ${g.starting_cash}`);
+  audit(j, bundle, g.id, 'game.start', `${players.length} players x ${g.starting_cash}`, actor);
   return gameView(bundle);
 }
 
-export function finishGame(bundle: GameBundle, j: Journal): GameViewResult {
+export function finishGame(bundle: GameBundle, j: Journal, actor = 'banker'): GameViewResult {
   const g = bundle.game;
   if (!g) throw fail('NOT_FOUND', 'game not found');
   if (g.status !== GAME_STATUS.ACTIVE) {
@@ -185,7 +191,7 @@ export function finishGame(bundle: GameBundle, j: Journal): GameViewResult {
   g.status = GAME_STATUS.FINISHED;
   g.ended_at = nowTs();
   j.games.push(g);
-  audit(j, bundle, g.id, 'game.finish', '');
+  audit(j, bundle, g.id, 'game.finish', '', actor);
   return gameView(bundle);
 }
 
@@ -231,7 +237,13 @@ export function removePlayer(bundle: GameBundle, j: Journal, gid: string, pid: s
   j.deletedPlayers.push({ game_id: gid, id: p.id });
 }
 
-export function declareBankrupt(bundle: GameBundle, j: Journal, gid: string, pid: string): PlayerViewResult {
+export function declareBankrupt(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  pid: string,
+  actor = 'banker'
+): PlayerViewResult {
   const g = bundle.game;
   if (!g) throw fail('NOT_FOUND', 'game not found');
   if (g.status !== GAME_STATUS.ACTIVE) {
@@ -257,7 +269,7 @@ export function declareBankrupt(bundle: GameBundle, j: Journal, gid: string, pid
   }
   p.is_bankrupt = true;
   if (!j.players.includes(p)) j.players.push(p);
-  audit(j, bundle, gid, 'player.bankrupt', 'player=' + pid);
+  audit(j, bundle, gid, 'player.bankrupt', 'player=' + pid, actor);
   return playerView(bundle, pid);
 }
 
@@ -269,7 +281,13 @@ export interface StartRoundResult {
   replayed?: boolean;
 }
 
-export function startRound(bundle: GameBundle, j: Journal, gid: string, idemKey?: string): StartRoundResult {
+export function startRound(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  idemKey?: string,
+  actor = 'banker'
+): StartRoundResult {
   const g = bundle.game;
   if (!g) throw fail('NOT_FOUND', 'game not found');
   if (g.status !== GAME_STATUS.ACTIVE) {
@@ -330,6 +348,7 @@ export function startRound(bundle: GameBundle, j: Journal, gid: string, idemKey?
   }
   g.current_round = round;
   j.games.push(g);
+  audit(j, bundle, gid, 'round.start', `round=${round} salary=${g.salary_per_round}`, actor);
   return { round, transactions: txns };
 }
 
@@ -353,7 +372,14 @@ export interface TransferRequest {
   description?: string;
 }
 
-export function transfer(bundle: GameBundle, j: Journal, gid: string, req: TransferRequest, idemKey?: string): Transaction {
+export function transfer(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  req: TransferRequest,
+  idemKey?: string,
+  actor = 'banker'
+): Transaction {
   const key = String(idemKey || '').trim();
   const parsed = {
     from: req?.from as any,
@@ -377,19 +403,32 @@ export function transfer(bundle: GameBundle, j: Journal, gid: string, req: Trans
     bundle,
     gid,
     'transfer',
-    `${parsed.category} ${parsed.amount} ${accountKey(parsed.from)}→${accountKey(parsed.to)}`
+    `${parsed.category} ${parsed.amount} ${accountKey(parsed.from)}→${accountKey(parsed.to)}`,
+    actor
   );
   return txn;
 }
 
-export function voidTxn(bundle: GameBundle, j: Journal, gid: string, txnId: string): Transaction {
+export function voidTxn(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  txnId: string,
+  actor = 'banker'
+): Transaction {
   if (!bundle.game) throw fail('NOT_FOUND', 'game not found');
   const orig = findTxn(bundle, txnId);
   if (!orig || orig.game_id !== gid) throw fail('NOT_FOUND', 'transaction not found');
-  return voidOne(bundle, j, gid, orig);
+  return voidOne(bundle, j, gid, orig, actor);
 }
 
-function voidOne(bundle: GameBundle, j: Journal, gid: string, orig: Transaction): Transaction {
+function voidOne(
+  bundle: GameBundle,
+  j: Journal,
+  gid: string,
+  orig: Transaction,
+  actor = 'banker'
+): Transaction {
   if (orig.voided_by_txn) {
     throw fail('INVALID_STATE', 'transaction already voided by ' + orig.voided_by_txn);
   }
@@ -430,16 +469,24 @@ function voidOne(bundle: GameBundle, j: Journal, gid: string, orig: Transaction)
     bundle,
     gid,
     'transfer.void',
-    `voiding ${orig.id} of category ${orig.account_category} amount ${orig.amount}`
+    `voiding ${orig.id} of category ${orig.account_category} amount ${orig.amount}`,
+    actor
   );
   return rev;
 }
 
-function audit(j: Journal, bundle: GameBundle, gid: string, action: string, detail: string): void {
+function audit(
+  j: Journal,
+  bundle: GameBundle,
+  gid: string,
+  action: string,
+  detail: string,
+  actor = 'banker'
+): void {
   const row = {
     id: newId('aud'),
     game_id: gid,
-    actor: 'banker',
+    actor,
     action,
     detail: String(detail || ''),
     created_at: nowTs(),

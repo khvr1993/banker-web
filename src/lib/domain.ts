@@ -106,6 +106,7 @@ export function errorStatus(kind: string): number {
     case 'BANK_INSOLVENT': return 400;
     case 'INVALID_STATE': return 409;
     case 'IDEMPOTENT_REPLAY': return 409;
+    case 'IDEMPOTENT_CONFLICT': return 409;
     default: return 500;
   }
 }

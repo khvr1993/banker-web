@@ -1,4 +1,5 @@
 import { PaletteColor, Player } from '../types';
+import { randomHex } from './random';
 
 export const PALETTE: PaletteColor[] = [
   { name: 'Slate', bg: '#18181b', text: '#f4f4f5' },
@@ -12,7 +13,7 @@ export const PALETTE: PaletteColor[] = [
 ];
 
 export function generateIdemKey(prefix = 'txn'): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  return `${prefix}-${Date.now()}-${randomHex(6)}`;
 }
 
 export function formatMoney(amount: number | string | undefined | null, currency = '₹'): string {

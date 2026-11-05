@@ -125,7 +125,8 @@ async function route(
   path: string,
   query: string,
   body: any,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  actor: string
 ): Promise<any> {
   const parts = path.split('/').filter(Boolean);
 
@@ -163,20 +164,20 @@ async function route(
     if (parts.length === 2 && method === 'PATCH') {
       const j = journal();
       const salary = body?.round_salary ?? null;
-      const view = svc.patchGame(game, j, gid, salary);
+      const view = svc.patchGame(game, j, gid, salary, actor);
       await commit(j);
       return view;
     }
     // POST start / finish
     if (parts.length === 3 && method === 'POST' && parts[2] === 'start') {
       const j = journal();
-      const view = svc.startGame(game, j);
+      const view = svc.startGame(game, j, actor);
       await commit(j);
       return view;
     }
     if (parts.length === 3 && method === 'POST' && parts[2] === 'finish') {
       const j = journal();
-      const view = svc.finishGame(game, j);
+      const view = svc.finishGame(game, j, actor);
       await commit(j);
       return view;
     }
@@ -216,7 +217,7 @@ async function route(
       }
       if (parts.length === 5 && parts[4] === 'bankrupt' && method === 'POST') {
         const j = journal();
-        const view = svc.declareBankrupt(game, j, gid, pid);
+        const view = svc.declareBankrupt(game, j, gid, pid, actor);
         await commit(j);
         return view;
       }
@@ -225,7 +226,7 @@ async function route(
     if (parts.length === 3 && parts[2] === 'rounds' && method === 'POST') {
       const j = journal();
       const idem = headers?.['Idempotency-Key'] || headers?.['idempotency-key'] || '';
-      const out = svc.startRound(game, j, gid, idem);
+      const out = svc.startRound(game, j, gid, idem, actor);
       await commit(j);
       return out;
     }
@@ -243,7 +244,7 @@ async function route(
     if (parts.length === 3 && parts[2] === 'transfers' && method === 'POST') {
       const j = journal();
       const idem = headers?.['Idempotency-Key'] || headers?.['idempotency-key'] || '';
-      const txn = svc.transfer(game, j, gid, body, idem);
+      const txn = svc.transfer(game, j, gid, body, idem, actor);
       await commit(j);
       return txn;
     }
@@ -260,7 +261,7 @@ async function route(
     }
     if (parts.length === 5 && parts[2] === 'transfers' && parts[4] === 'void' && method === 'POST') {
       const j = journal();
-      const txn = svc.voidTxn(game, j, gid, parts[3]);
+      const txn = svc.voidTxn(game, j, gid, parts[3], actor);
       await commit(j);
       return txn;
     }
@@ -277,6 +278,8 @@ export interface LocalApiOptions {
   method?: string;
   headers?: Record<string, string>;
   body?: any;
+  /** Audit actor. Defaults to 'banker'; the host sets `player:<id>`. */
+  actor?: string;
 }
 
 export async function localApi(path: string, options: LocalApiOptions = {}): Promise<any> {
@@ -292,7 +295,7 @@ export async function localApi(path: string, options: LocalApiOptions = {}): Pro
 
   return enqueue(async () => {
     try {
-      return await route(method, clean, query, body, headers);
+      return await route(method, clean, query, body, headers, options.actor || 'banker');
     } catch (e) {
       throw e instanceof ApiError ? e : toApiError(e);
     }
