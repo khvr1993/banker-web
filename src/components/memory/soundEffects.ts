@@ -1,15 +1,4 @@
-// Gentle, child-friendly sound effects plus Web Speech pronunciation.
-
-const PRAISE_PHRASES = [
-  'Great job!',
-  'You found it!',
-  'Super star!',
-  'Amazing!',
-  'High five!',
-  'Wow, so clever!',
-  'Wonderful!',
-  'You did it!',
-];
+// Gentle, child-friendly sound effects.
 
 interface ToneSpec {
   freq: number;
@@ -93,42 +82,6 @@ class MemorySounds {
     melody.forEach((freq, index) => {
       this.tone({ freq, start: 0.12 + index * 0.11, duration: 0.24, type: 'triangle', volume: 0.065 });
     });
-  }
-
-  praise() {
-    const phrase = PRAISE_PHRASES[Math.floor(Math.random() * PRAISE_PHRASES.length)];
-    this.speak(phrase);
-  }
-
-  speak(text: string) {
-    if (!this.enabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      const synth = window.speechSynthesis;
-      synth.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.92;
-      utterance.pitch = 1.18;
-      utterance.volume = 0.95;
-      const voices = synth.getVoices();
-      const voice =
-        voices.find((item) => item.lang === 'en-IN') ||
-        voices.find((item) => item.lang.startsWith('en-GB')) ||
-        voices.find((item) => item.lang.startsWith('en'));
-      if (voice) utterance.voice = voice;
-      else utterance.lang = 'en-IN';
-      synth.speak(utterance);
-    } catch {
-      // Speech support varies by browser; the game still works silently.
-    }
-  }
-
-  cancelSpeech() {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // Ignore browsers that refuse cancellation.
-    }
   }
 }
 

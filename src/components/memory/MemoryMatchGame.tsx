@@ -96,13 +96,11 @@ export const MemoryMatchGame: React.FC = () => {
 
   useEffect(() => {
     memorySounds.enabled = soundEnabled;
-    if (!soundEnabled) memorySounds.cancelSpeech();
   }, [soundEnabled]);
 
   useEffect(
     () => () => {
       clearTimers();
-      memorySounds.cancelSpeech();
     },
     [clearTimers]
   );
@@ -138,20 +136,10 @@ export const MemoryMatchGame: React.FC = () => {
       isNew: result.isNew,
     });
     setShowConfetti(true);
-
-    later(() => {
-      if (settings.mode === 'duo' && winner) {
-        if (winner === 'tie') memorySounds.speak('It is a tie! You are both memory superstars!');
-        else memorySounds.speak(`${PLAYERS[winner].name} wins! You are both memory superstars!`);
-      } else {
-        memorySounds.speak('You did it! You are a memory superstar!');
-      }
-    }, 900);
   };
 
   const startGame = (next?: { themeId?: ThemeId; difficultyId?: DifficultyId; mode?: GameMode }) => {
     clearTimers();
-    memorySounds.cancelSpeech();
     const nextTheme = next?.themeId ?? settingsRef.current.themeId;
     const nextDifficulty = next?.difficultyId ?? settingsRef.current.difficultyId;
     const nextMode = next?.mode ?? settingsRef.current.mode;
@@ -192,7 +180,6 @@ export const MemoryMatchGame: React.FC = () => {
 
     if (currentFlipped.length === 0) {
       setFlippedBoth([uid]);
-      memorySounds.speak(card.symbol.name);
       return;
     }
 
@@ -210,7 +197,6 @@ export const MemoryMatchGame: React.FC = () => {
     const nextMoves = movesRef.current + 1;
     movesRef.current = nextMoves;
     setMoves(nextMoves);
-    later(() => memorySounds.speak(card.symbol.name), 240);
 
     if (cardsMatch(first, card)) {
       later(() => {
@@ -223,7 +209,6 @@ export const MemoryMatchGame: React.FC = () => {
         lockedRef.current = isFinalPair;
         setLocked(isFinalPair);
         memorySounds.match();
-        later(() => memorySounds.praise(), 520);
 
         let resolvedScores = scoresRef.current;
         if (settingsRef.current.mode === 'duo') {
@@ -266,7 +251,6 @@ export const MemoryMatchGame: React.FC = () => {
     setPeeking(true);
     setPeeksLeft((previous) => previous - 1);
     memorySounds.peek();
-    memorySounds.speak('Magic peek!');
     later(() => {
       peekingRef.current = false;
       setPeeking(false);
