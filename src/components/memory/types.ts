@@ -1,6 +1,6 @@
 export type ThemeId = 'animals' | 'fruits' | 'india' | 'shapes' | 'vehicles';
 
-export type DifficultyId = 'toddler' | 'easy' | 'explorer' | 'champion';
+export type DifficultyId = 'toddler' | 'easy' | 'explorer' | 'champion' | 'legend';
 
 export type GameMode = 'solo' | 'duo';
 
@@ -9,7 +9,6 @@ export type PlayerId = 'teddy' | 'bunny';
 export interface MemorySymbol {
   id: string;
   name: string;
-  speech: string;
   emoji: string;
   accent: string;
   hint?: string;
@@ -34,6 +33,7 @@ export interface Difficulty {
   icon: string;
   medalEmoji: string;
   medalName: string;
+  centerStar?: boolean;
 }
 
 export interface PlayerProfile {

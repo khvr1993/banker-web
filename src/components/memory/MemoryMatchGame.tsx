@@ -192,7 +192,7 @@ export const MemoryMatchGame: React.FC = () => {
 
     if (currentFlipped.length === 0) {
       setFlippedBoth([uid]);
-      memorySounds.speak(card.symbol.speech);
+      memorySounds.speak(card.symbol.name);
       return;
     }
 
@@ -210,7 +210,7 @@ export const MemoryMatchGame: React.FC = () => {
     const nextMoves = movesRef.current + 1;
     movesRef.current = nextMoves;
     setMoves(nextMoves);
-    later(() => memorySounds.speak(card.symbol.speech), 240);
+    later(() => memorySounds.speak(card.symbol.name), 240);
 
     if (cardsMatch(first, card)) {
       later(() => {
@@ -450,21 +450,28 @@ export const MemoryMatchGame: React.FC = () => {
           </div>
         )}
         <div
-          className="mm-board"
+          className={`mm-board ${difficulty.columns >= 5 ? 'is-dense' : ''}`}
           style={{ '--mm-cols': difficulty.columns } as React.CSSProperties}
         >
-          {cards.map((card) => (
-            <MemoryCardTile
-              key={card.uid}
-              card={card}
-              faceUp={peeking || flipped.includes(card.uid) || matched.has(card.uid)}
-              matched={matched.has(card.uid)}
-              wobbly={wobble.includes(card.uid)}
-              disabled={locked || phase !== 'playing'}
-              peeking={peeking}
-              backIcon={theme.backIcon}
-              onFlip={handleFlip}
-            />
+          {cards.map((card, index) => (
+            <React.Fragment key={card.uid}>
+              {difficulty.centerStar && index === cards.length / 2 && (
+                <div className="mm-lucky-cell" aria-hidden="true">
+                  <span className="mm-lucky-star">⭐</span>
+                  <span className="mm-lucky-label">Lucky Star</span>
+                </div>
+              )}
+              <MemoryCardTile
+                card={card}
+                faceUp={peeking || flipped.includes(card.uid) || matched.has(card.uid)}
+                matched={matched.has(card.uid)}
+                wobbly={wobble.includes(card.uid)}
+                disabled={locked || phase !== 'playing'}
+                peeking={peeking}
+                backIcon={theme.backIcon}
+                onFlip={handleFlip}
+              />
+            </React.Fragment>
           ))}
         </div>
       </section>

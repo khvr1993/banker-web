@@ -24,7 +24,7 @@ export const MemoryCardTile: React.FC<MemoryCardTileProps> = ({
 }) => {
   const { symbol } = card;
   const label = faceUp
-    ? `${symbol.name}${symbol.hint ? `, ${symbol.hint}` : ''}${matched ? ', matched' : ''}`
+    ? `${symbol.name}${matched ? ', matched' : ''}`
     : 'Hidden card, press to flip';
 
   return (

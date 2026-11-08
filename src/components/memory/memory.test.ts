@@ -74,7 +74,10 @@ test('buildDeck is deterministic for a seeded random source', () => {
 
 test('cardsMatch only matches two different cards with the same pair id', () => {
   const deck = buildDeck(getTheme('fruits'), DIFFICULTIES[0], seededRandom(3));
-  const [first, second, other] = deck;
+  const first = deck[0];
+  const second = deck.find((card) => card.pairId === first.pairId && card.uid !== first.uid);
+  const other = deck.find((card) => card.pairId !== first.pairId);
+  if (!second || !other) throw new Error('deck is missing expected cards');
 
   assert.equal(cardsMatch(first, second), true);
   assert.equal(cardsMatch(first, first), false);
@@ -142,10 +145,23 @@ test('readStickers ignores malformed entries', () => {
   assert.equal(stickers[0].id, 'animals:toddler');
 });
 
-test('every theme has enough symbols for the champion 4x4 board', () => {
+test('every theme has enough symbols for the 5x5 legend board', () => {
   for (const theme of THEMES) {
-    assert.ok(theme.symbols.length >= 8, `${theme.id} needs at least 8 symbols`);
+    assert.ok(theme.symbols.length >= 12, `${theme.id} needs at least 12 symbols`);
     const ids = new Set(theme.symbols.map((symbol) => symbol.id));
     assert.equal(ids.size, theme.symbols.length, `${theme.id} has duplicate symbol ids`);
   }
+});
+
+test('legend is a 5x5 board with 12 pairs and a lucky center cell', () => {
+  const legend = DIFFICULTIES.find((difficulty) => difficulty.id === 'legend');
+  if (!legend) throw new Error('legend difficulty is missing');
+  assert.equal(legend.gridLabel, '5 × 5');
+  assert.equal(legend.columns, 5);
+  assert.equal(legend.pairs, 12);
+  assert.equal(legend.centerStar, true);
+
+  const deck = buildDeck(getTheme('animals'), legend, seededRandom(11));
+  assert.equal(deck.length, 24);
+  assert.equal(new Set(deck.map((card) => card.pairId)).size, 12);
 });

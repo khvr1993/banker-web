@@ -592,6 +592,52 @@ html.dark .mm-main {
   width: min(100%, calc(var(--mm-cols, 4) * 172px));
 }
 
+.mm-board.is-dense {
+  gap: clamp(6px, 1vw, 10px);
+  width: min(100%, calc(var(--mm-cols, 5) * 152px));
+}
+
+.mm-board.is-dense .mm-card-name {
+  font-size: clamp(0.6rem, 1.3vw, 0.82rem);
+}
+
+.mm-board.is-dense .mm-card-hint {
+  font-size: clamp(0.48rem, 1vw, 0.6rem);
+}
+
+.mm-lucky-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  aspect-ratio: 1 / 1.14;
+  padding: 6%;
+  border: 2px dashed #fbbf24;
+  border-radius: 18px;
+  background: radial-gradient(circle at 50% 32%, #fffbe8, #fef3c7 62%, #fde68a);
+  box-shadow: inset 0 0 0 6px rgba(255, 255, 255, 0.45), 0 8px 18px rgba(245, 158, 11, 0.18);
+  color: #b45309;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mm-lucky-star {
+  font-size: clamp(1.8rem, 4.6vw, 2.8rem);
+  line-height: 1;
+  filter: drop-shadow(0 3px 5px rgba(180, 83, 9, 0.22));
+  animation: mm-twinkle 3s ease-in-out infinite;
+}
+
+.mm-lucky-label {
+  font-size: clamp(0.52rem, 1.1vw, 0.7rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .mm-peek-banner {
   position: absolute;
   top: -8px;
@@ -915,7 +961,7 @@ html.dark .mm-main {
 
 .mm-album-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1213,6 +1259,26 @@ html.dark .mm-main {
   .mm-board {
     width: 100%;
     gap: 8px;
+  }
+
+  .mm-board.is-dense {
+    gap: 6px;
+  }
+
+  .mm-board.is-dense .mm-card-name {
+    font-size: 0.55rem;
+  }
+
+  .mm-board.is-dense .mm-card-hint {
+    display: none;
+  }
+
+  .mm-board.is-dense .mm-card-emoji {
+    font-size: clamp(1.2rem, 6.6vw, 1.7rem);
+  }
+
+  .mm-board.is-dense .mm-lucky-label {
+    display: none;
   }
 
   .mm-card-hint {
