@@ -3,7 +3,14 @@ import { useGame } from '../context/GameContext';
 import { formatMoney } from '../lib/constants';
 import { ConnectionPill } from './ConnectionPill';
 
-export const Header: React.FC = () => {
+export type GameView = 'banker' | 'memory';
+
+interface HeaderProps {
+  activeGame?: GameView;
+  onSwitchGame?: (game: GameView) => void;
+}
+
+export const Header: React.FC<HeaderProps> = ({ activeGame = 'banker', onSwitchGame }) => {
   const {
     game,
     appMode,
@@ -17,6 +24,7 @@ export const Header: React.FC = () => {
     leaveSession,
   } = useGame();
 
+  const isMemory = activeGame === 'memory';
   const isPlayerMode = appMode === 'player';
   const isClient = sessionRole === 'client';
   const canUseBankerTools = !isClient;
@@ -36,11 +44,38 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
+        {onSwitchGame && (
+          <nav className="game-switcher" aria-label="Choose a game">
+            <button
+              type="button"
+              className={`game-switcher-btn ${!isMemory ? 'is-active' : ''}`}
+              onClick={() => onSwitchGame('banker')}
+              aria-current={!isMemory ? 'page' : undefined}
+              title="Business Game Banker console"
+            >
+              <span aria-hidden="true">🎲</span>
+              <span className="gs-long">Banker Console</span>
+              <span className="gs-short">Banker</span>
+            </button>
+            <button
+              type="button"
+              className={`game-switcher-btn is-memory ${isMemory ? 'is-active' : ''}`}
+              onClick={() => onSwitchGame('memory')}
+              aria-current={isMemory ? 'page' : undefined}
+              title="Memory Match game for kids"
+            >
+              <span aria-hidden="true">🃏</span>
+              <span className="gs-long">Memory Match (Kids)</span>
+              <span className="gs-short">Memory</span>
+            </button>
+          </nav>
+        )}
+
         {/* Workspace Navigation & Actions */}
         <div className="nav-actions">
-          <ConnectionPill />
+          {!isMemory && <ConnectionPill />}
 
-          {isClient && (
+          {isClient && !isMemory && (
             <button
               id="btn-leave-session"
               className="btn btn-ghost btn-sm"
@@ -55,7 +90,7 @@ export const Header: React.FC = () => {
             </button>
           )}
 
-          {canUseBankerTools && (
+          {canUseBankerTools && !isMemory && (
           <button
             id="btn-backup"
             className="btn btn-ghost btn-sm"
@@ -109,7 +144,7 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          {canUseBankerTools && (!isPlayerMode || !game) && (
+          {canUseBankerTools && !isMemory && (!isPlayerMode || !game) && (
             <button
               id="btn-open-games-list"
               className="btn btn-secondary btn-sm"
@@ -119,7 +154,7 @@ export const Header: React.FC = () => {
             </button>
           )}
 
-          {canUseBankerTools && (!isPlayerMode || !game) && (
+          {canUseBankerTools && !isMemory && (!isPlayerMode || !game) && (
             <button
               id="btn-new-game-modal"
               className="btn btn-primary btn-sm"
@@ -129,7 +164,7 @@ export const Header: React.FC = () => {
             </button>
           )}
 
-          {game && !isClient && (
+          {game && !isClient && !isMemory && (
             <button
               id="btn-toggle-mode"
               className={`btn mode-toggle-btn ${isPlayerMode ? 'btn-secondary' : 'btn-emerald'}`}
@@ -155,7 +190,7 @@ export const Header: React.FC = () => {
       </div>
 
       {/* Active Game Context Strip */}
-      {game && (
+      {game && !isMemory && (
         <div className="game-header-controls" id="game-header-controls">
           <button
             type="button"
